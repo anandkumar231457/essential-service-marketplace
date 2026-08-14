@@ -1,0 +1,131 @@
+// Prisma schema for the Essential Service Marketplace.
+// PostgreSQL + PostGIS. PostGIS geography columns are marked `Unsupported`
+// (Prisma can't natively model them) — see the migration SQL for the
+// `CREATE EXTENSION postgis` and GiST index.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Enums ────────────────────────────────────────────────────────────────
+
+enum Role {
+  CUSTOMER
+  PROVIDER
+  ADMIN
+}
+
+enum VerifiedStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum BookingStatus {
+  REQUESTED
+  ACCEPTED
+  EN_ROUTE
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  REJECTED
+}
+
+// ── Models ───────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  role         Role     @default(CUSTOMER)
+  name         String
+  phone        String   @unique
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  providerProfile  ProviderProfile?
+  providerLocation ProviderLocation?
+  customerBookings Booking[]        @relation("CustomerBookings")
+  providerBookings Booking[]        @relation("ProviderBookings")
+}
+
+model ProviderProfile {
+  id             Int            @id @default(autoincrement())
+  userId         String         @unique
+  user           User           @relation(fields: [userId], references: [id])
+  category       String
+  skills         String[]
+  hourlyRate     Float
+  verifiedStatus VerifiedStatus @default(PENDING)
+  avgRating      Float          @default(0)
+  idDocumentUrl  String?
+}
+
+model ProviderLocation {
+  id         Int      @id @default(autoincrement())
+  providerId String   @unique
+  provider   User     @relation(fields: [providerId], references: [id])
+  lat        Float
+  lng        Float
+  // PostGIS geography column — created via raw SQL in the migration.
+  location   Unsupported("geography(Point)")?
+  isOnline   Boolean  @default(false)
+  updatedAt  DateTime @updatedAt
+}
+
+model ServiceCategory {
+  id       Int       @id @default(autoincrement())
+  name     String    @unique
+  icon     String
+  bookings Booking[]
+}
+
+model Booking {
+  id          String        @id @default(cuid())
+  customerId  String
+  customer    User          @relation("CustomerBookings", fields: [customerId], references: [id])
+  providerId  String
+  provider    User          @relation("ProviderBookings", fields: [providerId], references: [id])
+  categoryId  Int
+  category    ServiceCategory @relation(fields: [categoryId], references: [id])
+  status      BookingStatus @default(REQUESTED)
+  requestedAt DateTime      @default(now())
+  scheduledAt DateTime?
+  address     String
+  lat         Float
+  lng         Float
+
+  statusHistory BookingStatusHistory[]
+  review        Review?
+  payment       Payment?
+}
+
+model BookingStatusHistory {
+  id        Int           @id @default(autoincrement())
+  bookingId String
+  booking   Booking       @relation(fields: [bookingId], references: [id])
+  status    BookingStatus
+  changedAt DateTime      @default(now())
+}
+
+model Review {
+  id        Int      @id @default(autoincrement())
+  bookingId String   @unique
+  booking   Booking  @relation(fields: [bookingId], references: [id])
+  rating    Int
+  comment   String?
+  createdAt DateTime @default(now())
+}
+
+model Payment {
+  id            Int     @id @default(autoincrement())
+  bookingId     String  @unique
+  booking       Booking @relation(fields: [bookingId], references: [id])
+  amount        Float
+  status        String
+  providerTxnId String?
+}
