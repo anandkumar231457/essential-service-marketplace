@@ -151,6 +151,13 @@ async function main() {
         isOnline: Math.random() > 0.3, // ~70% online
       },
     });
+
+    // Populate the PostGIS geography column (Prisma can't write Unsupported fields).
+    await prisma.$executeRaw`
+      UPDATE "ProviderLocation"
+      SET location = ST_SetSRID(ST_MakePoint(${loc.lng}, ${loc.lat}), 4326)::geography
+      WHERE "providerId" = ${user.id}
+    `;
   }
   console.log(`  ✓ ${providers.length} providers created (profiles + locations)`);
 
