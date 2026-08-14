@@ -1,0 +1,19 @@
+{
+  "name": "essential-service-marketplace",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Monorepo for the Essential Service Marketplace (client + server)",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.9.0",
+    "eslint-config-prettier": "^9.1.0",
+    "globals": "^15.9.0",
+    "prettier": "^3.3.3",
+    "typescript-eslint": "^8.2.0"
+  }
+}
