@@ -6,7 +6,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install server dependencies (includes devDeps for prisma CLI + tsc).
-RUN npm ci
+RUN npm install
 
 # Copy the server source + Prisma schema.
 COPY . ./
