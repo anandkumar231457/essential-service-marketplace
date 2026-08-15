@@ -51,7 +51,8 @@ export default function Track() {
 
     // Try Socket.io first
     try {
-      socket = io('/', { transports: ['websocket'] });
+      const socketUrl = import.meta.env.VITE_SOCKET_URL || '/';
+      socket = io(socketUrl, { transports: ['websocket'] });
       socket.on('connect', () => {
         setSocketConnected(true);
         socket?.emit('join-booking-room', bookingId);
