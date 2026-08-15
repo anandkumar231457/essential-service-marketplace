@@ -14,4 +14,3 @@ module.exports = {
   },
   plugins: [],
 };
-</write_to_file></tool_call>
