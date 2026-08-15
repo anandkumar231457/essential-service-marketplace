@@ -1,0 +1,46 @@
+### Auth — Register & Login
+@baseUrl = http://localhost:4000
+
+### Register a new customer
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+  "name": "Test Customer A",
+  "phone": "9999900001",
+  "email": "customer.a@test.com",
+  "password": "testpass123"
+}
+
+### Login
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "customer.a@test.com",
+  "password": "testpass123"
+}
+
+### Refresh access token
+POST {{baseUrl}}/api/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{loginResponse.accessToken}}"
+}
+
+### Protected route (requires auth)
+GET {{baseUrl}}/api/health
+Authorization: Bearer {{loginResponse.accessToken}}
+
+### Register a provider
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+  "name": "Ravi Kumar",
+  "phone": "9880010001",
+  "email": "ravi.kumar@example.com",
+  "password": "testpass123",
+  "role": "PROVIDER"
+}
