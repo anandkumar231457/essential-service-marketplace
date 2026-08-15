@@ -84,9 +84,6 @@ export async function update(req: Request, res: Response) {
  * Uses PostGIS ST_DWithin + ST_Distance, sorted by distance.
  */
 export async function nearby(req: Request, res: Response) {
-  const user = res.locals.user;
-  if (!user) return res.status(401).json({ error: 'Unauthorized' });
-
   const lat = parseFloat(req.query.lat as string);
   const lng = parseFloat(req.query.lng as string);
   const radiusKm = parseFloat((req.query.radiusKm as string) ?? '5');
