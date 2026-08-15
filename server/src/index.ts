@@ -147,8 +147,8 @@ app.post('/api/providers', requireAuth, requireRole('PROVIDER'), createProvider)
 app.get('/api/providers/me', requireAuth, readProvider);
 app.put('/api/providers/me', requireAuth, requireRole('PROVIDER'), updateProvider);
 
-// Nearby provider search (Step 4)
-app.get('/api/providers/nearby', requireAuth, nearbyProviders);
+// Nearby provider search — public, no auth required
+app.get('/api/providers/nearby', nearbyProviders);
 
 // Provider ping endpoint (Socket.io message + REST fallback)
 app.post('/api/providers/ping', requireAuth, requireRole('PROVIDER'), async (req, res) => {
