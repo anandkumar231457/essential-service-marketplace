@@ -16,6 +16,7 @@ import UserProfile from './pages/UserProfile';
 import ProviderEarnings from './pages/ProviderEarnings';
 import ProviderAvailability from './pages/ProviderAvailability';
 import ProviderCoverage from './pages/ProviderCoverage';
+import ProviderServices from './pages/ProviderServices';
 import MobileNav from './components/MobileNav';
 
 const queryClient = new QueryClient();
@@ -122,6 +123,7 @@ function App() {
               <Route path="/provider/earnings" element={<ProviderEarnings />} />
               <Route path="/provider/availability" element={<ProviderAvailability />} />
               <Route path="/provider/coverage" element={<ProviderCoverage />} />
+              <Route path="/provider/services" element={<ProviderServices />} />
             </Routes>
           </main>
           <MobileNav />

@@ -51,6 +51,12 @@ export default function ProviderDashboard() {
         {/* Console Quick Nav Buttons */}
         <div className="flex flex-wrap gap-3">
           <Link
+            to="/provider/services"
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 shadow-sm hover:border-teal-200 hover:text-primary transition"
+          >
+            🛠️ Trade Category, Skills & Rates
+          </Link>
+          <Link
             to="/provider/earnings"
             className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 shadow-sm hover:border-teal-200 hover:text-primary transition"
           >
