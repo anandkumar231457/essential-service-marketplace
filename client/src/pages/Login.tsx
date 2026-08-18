@@ -14,11 +14,12 @@ interface AuthResponse {
 export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [role, setRole] = useState<'CUSTOMER' | 'PROVIDER'>('CUSTOMER');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [googleModal, setGoogleModal] = useState(false);
-  const [googleEmail, setGoogleEmail] = useState('user@gmail.com');
-  const [googleName, setGoogleName] = useState('Google User');
+  const [googleEmail, setGoogleEmail] = useState('pro@gmail.com');
+  const [googleName, setGoogleName] = useState('Pro Provider');
   const navigate = useNavigate();
   const setAuth = useAuthStore((s) => s.setAuth);
 
@@ -44,7 +45,7 @@ export default function Login() {
       const data = await api.post<AuthResponse>('/api/auth/google', {
         email: payload.email,
         name: payload.name,
-        role: 'CUSTOMER',
+        role: role,
       });
       setAuth(data.user, data.accessToken, data.refreshToken);
       setGoogleModal(false);
@@ -62,8 +63,30 @@ export default function Login() {
         <div className="mx-auto mb-6 grid h-11 w-11 place-items-center rounded-xl bg-primary text-xl text-white">✦</div>
         <p className="text-center text-sm font-semibold text-primary">WELCOME BACK</p>
         <h1 className="mt-2 text-3xl font-bold text-center text-slate-900">Sign in to FixItNow</h1>
-        <p className="mt-3 mb-7 text-center text-sm text-slate-500">Manage your repairs and keep track of every visit.</p>
+        <p className="mt-2 mb-6 text-center text-xs text-slate-500">Sign in as a Customer or Service Provider specialist.</p>
         
+        {/* Account Type Selector */}
+        <div className="mb-6 flex rounded-xl bg-slate-100 p-1">
+          <button
+            type="button"
+            onClick={() => setRole('CUSTOMER')}
+            className={`flex-1 rounded-lg py-2 text-xs font-bold transition ${
+              role === 'CUSTOMER' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            👤 Customer Sign-In
+          </button>
+          <button
+            type="button"
+            onClick={() => setRole('PROVIDER')}
+            className={`flex-1 rounded-lg py-2 text-xs font-bold transition ${
+              role === 'PROVIDER' ? 'bg-primary text-white shadow-sm' : 'text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            🔧 Service Provider Pro
+          </button>
+        </div>
+
         {error && <p className="text-red-600 text-sm mb-4 text-center">{error}</p>}
 
         {/* Real Google GIS Official Button */}
@@ -114,14 +137,14 @@ export default function Login() {
             disabled={loading}
             className="w-full rounded-xl bg-primary py-3 font-semibold text-white shadow-sm transition hover:bg-teal-700 disabled:opacity-50"
           >
-            {loading ? 'Logging in…' : 'Login'}
+            {loading ? 'Logging in…' : role === 'PROVIDER' ? 'Login to Pro Console' : 'Login'}
           </button>
         </form>
 
         <p className="mt-4 text-center text-sm text-gray-600">
           Don't have an account?{' '}
           <Link to="/register" className="font-semibold text-primary hover:underline">
-            Register
+            Register as {role === 'PROVIDER' ? 'Provider' : 'Customer'}
           </Link>
         </p>
 
@@ -130,11 +153,24 @@ export default function Login() {
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
             <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl space-y-4">
               <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                <h3 className="font-bold text-slate-900 text-sm">Google Account Login</h3>
+                <h3 className="font-bold text-slate-900 text-sm">
+                  Google {role === 'PROVIDER' ? 'Provider' : 'Customer'} Sign-In
+                </h3>
                 <button onClick={() => setGoogleModal(false)} className="text-slate-400 text-sm font-bold">✕</button>
               </div>
               <p className="text-xs text-slate-500">Select or enter your Google Account email:</p>
               <form onSubmit={(e) => { e.preventDefault(); processGoogleAuth({ email: googleEmail, name: googleName }); }} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Logging in as</label>
+                  <select
+                    value={role}
+                    onChange={(e) => setRole(e.target.value as 'CUSTOMER' | 'PROVIDER')}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs focus:ring-2 focus:ring-teal-200 outline-none"
+                  >
+                    <option value="CUSTOMER">Customer Account</option>
+                    <option value="PROVIDER">Service Provider (Pro Console)</option>
+                  </select>
+                </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Google Email</label>
                   <input
