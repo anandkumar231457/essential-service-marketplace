@@ -50,23 +50,26 @@ export async function create(req: Request, res: Response) {
   });
 
   // Recalculate provider's avgRating from all their reviews
-  const providerBookings = await prisma.booking.findMany({
-    where: { providerId: booking.providerId, status: 'COMPLETED' },
-    select: { review: { select: { rating: true } } },
-  });
+  let avgRating = 0;
+  if (booking.providerId) {
+    const providerBookings = await prisma.booking.findMany({
+      where: { providerId: booking.providerId, status: 'COMPLETED' },
+      select: { review: { select: { rating: true } } },
+    });
 
-  const ratings = providerBookings
-    .map((b) => b.review?.rating)
-    .filter((r): r is number => typeof r === 'number');
+    const ratings = providerBookings
+      .map((b) => b.review?.rating)
+      .filter((r): r is number => typeof r === 'number');
 
-  const avgRating = ratings.length
-    ? +(ratings.reduce((a, b) => a + b, 0) / ratings.length).toFixed(1)
-    : 0;
+    avgRating = ratings.length
+      ? +(ratings.reduce((a, b) => a + b, 0) / ratings.length).toFixed(1)
+      : 0;
 
-  await prisma.providerProfile.update({
-    where: { userId: booking.providerId },
-    data: { avgRating },
-  });
+    await prisma.providerProfile.update({
+      where: { userId: booking.providerId },
+      data: { avgRating },
+    });
+  }
 
   return res.status(201).json({ review, avgRating });
 }

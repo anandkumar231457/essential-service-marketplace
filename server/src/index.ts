@@ -281,17 +281,17 @@ app.get('/api/bookings/:bookingId', requireAuth, async (req, res) => {
   return res.json({ booking });
 });
 
-// Open job board — providers see all REQUESTED jobs ready for dispatch
+// Open job board — only unassigned (null providerId) REQUESTED broadcast jobs
 app.get('/api/bookings/open', requireAuth, requireRole('PROVIDER'), async (_req, res) => {
   try {
     const openJobs = await prisma.booking.findMany({
       where: {
         status: 'REQUESTED',
+        providerId: null,   // only truly open broadcast jobs — no provider assigned yet
       },
       include: {
         category: true,
         customer: { select: { name: true, phone: true } },
-        provider: { select: { name: true, phone: true } },
       },
       orderBy: { requestedAt: 'desc' },
     });

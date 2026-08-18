@@ -44,7 +44,9 @@ export default function BookingConfirmation() {
 
             <div className="flex justify-between text-slate-600">
               <span>Assigned Specialist</span>
-              <span className="font-semibold text-slate-900">{data?.booking.provider?.name || 'Local Pro'}</span>
+              <span className="font-semibold text-slate-900">
+                {data?.booking.provider?.name || '🛵 Broadcasting to nearby pros…'}
+              </span>
             </div>
 
             <div className="flex justify-between text-slate-600">

@@ -91,8 +91,8 @@ model Booking {
   id          String        @id @default(cuid())
   customerId  String
   customer    User          @relation("CustomerBookings", fields: [customerId], references: [id])
-  providerId  String
-  provider    User          @relation("ProviderBookings", fields: [providerId], references: [id])
+  providerId  String?       // nullable = open broadcast job (Swiggy-style)
+  provider    User?         @relation("ProviderBookings", fields: [providerId], references: [id])
   categoryId  Int
   category    ServiceCategory @relation(fields: [categoryId], references: [id])
   status      BookingStatus @default(REQUESTED)
@@ -101,6 +101,7 @@ model Booking {
   address     String
   lat         Float
   lng         Float
+  description String?       // customer's problem description
 
   statusHistory BookingStatusHistory[]
   review        Review?
