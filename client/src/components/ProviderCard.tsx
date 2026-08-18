@@ -22,16 +22,22 @@ export default function ProviderCard({ provider, isSelected = false, onSelect }:
         <div className="flex gap-4">
           <div className="relative grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-teal-50 text-xl font-bold text-primary">
             {provider.name.charAt(0)}
-            {provider.isOnline && (
-              <span className="absolute -right-0.5 -top-0.5 h-3.5 w-3.5 rounded-full border-2 border-white bg-emerald-500" />
-            )}
+            <span
+              className={`absolute -right-0.5 -top-0.5 h-3.5 w-3.5 rounded-full border-2 border-white ${
+                provider.isOnline ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'
+              }`}
+            />
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <h3 className="font-bold text-slate-900 group-hover:text-primary transition">{provider.name}</h3>
-              {provider.verifiedStatus === 'VERIFIED' && (
-                <span className="rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-bold text-primary">
-                  ✓ Verified
+              {provider.isOnline ? (
+                <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700 border border-emerald-200">
+                  ● Active Now
+                </span>
+              ) : (
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">
+                  ○ Offline
                 </span>
               )}
             </div>
@@ -72,9 +78,11 @@ export default function ProviderCard({ provider, isSelected = false, onSelect }:
             e.stopPropagation();
             navigate(`/book/${provider.providerId}?category=${encodeURIComponent(provider.category)}`);
           }}
-          className="flex-1 rounded-xl bg-primary py-2 text-center text-xs font-semibold text-white transition hover:bg-teal-700 shadow-sm"
+          className={`flex-1 rounded-xl py-2 text-center text-xs font-semibold text-white transition shadow-sm ${
+            provider.isOnline ? 'bg-primary hover:bg-teal-700' : 'bg-slate-800 hover:bg-slate-900'
+          }`}
         >
-          Book Now
+          {provider.isOnline ? '⚡ Book Instant' : '📅 Schedule'}
         </button>
       </div>
     </div>

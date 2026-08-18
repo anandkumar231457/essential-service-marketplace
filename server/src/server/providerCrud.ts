@@ -80,14 +80,16 @@ export async function update(req: Request, res: Response) {
 // ── Nearby provider search (PostGIS) ─────────────────────────────────────
 
 /**
- * GET /api/providers/nearby?lat=&lng=&category=&radiusKm=
+ * GET /api/providers/nearby?lat=&lng=&category=&radiusKm=&onlineOnly=
  * Uses PostGIS ST_DWithin + ST_Distance, sorted by distance.
+ * Returns both online and offline verified providers unless onlineOnly=true is requested.
  */
 export async function nearby(req: Request, res: Response) {
   const lat = parseFloat(req.query.lat as string);
   const lng = parseFloat(req.query.lng as string);
   const radiusKm = parseFloat((req.query.radiusKm as string) ?? '5');
   const category = req.query.category as string | undefined;
+  const onlineOnly = req.query.onlineOnly === 'true';
 
   if (isNaN(lat) || isNaN(lng)) {
     return res.status(400).json({ error: 'lat and lng query params are required' });
@@ -96,13 +98,12 @@ export async function nearby(req: Request, res: Response) {
     return res.status(400).json({ error: 'radiusKm must be a positive number' });
   }
 
-  // Use PostGIS ST_DWithin to filter and ST_Distance to sort by distance.
-  // The `location` column is a geography(Point) created via raw SQL.
-  // Build the category filter as a parameterized SQL fragment so every
-  // user-supplied value (lat, lng, radius, category) is bound as a
-  // parameter — never string-interpolated into the query.
   const categoryFilter = category
     ? Prisma.sql`AND pp.category = ${category}`
+    : Prisma.empty;
+
+  const onlineFilter = onlineOnly
+    ? Prisma.sql`AND pl."isOnline" = true`
     : Prisma.empty;
 
   const providers = await prisma.$queryRaw(Prisma.sql`
@@ -125,14 +126,14 @@ export async function nearby(req: Request, res: Response) {
     FROM "ProviderLocation" pl
     JOIN "User" u ON u.id = pl."providerId"
     JOIN "ProviderProfile" pp ON pp."userId" = u.id
-    WHERE pl."isOnline" = true
-      AND pp."verifiedStatus" = 'VERIFIED'
+    WHERE pp."verifiedStatus" = 'VERIFIED'
       AND ST_DWithin(
         pl.location,
         ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography,
         ${radiusKm * 1000}
       )
       ${categoryFilter}
+      ${onlineFilter}
     ORDER BY ST_Distance(pl.location, ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography)
     LIMIT 50
   `);
