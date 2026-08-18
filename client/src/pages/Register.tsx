@@ -34,7 +34,7 @@ export default function Register() {
         role,
       });
       setAuth(data.user, data.accessToken, data.refreshToken);
-      navigate(data.user.role === 'PROVIDER' ? '/provider' : '/');
+      navigate(data.user.role === 'PROVIDER' ? '/providers' : '/');
     } catch (err: any) {
       setError(err.message || 'Registration failed');
     } finally {
@@ -43,10 +43,12 @@ export default function Register() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-md">
-        <h1 className="text-2xl font-bold mb-6 text-center">Essential Service Marketplace</h1>
-        <h2 className="text-lg font-semibold mb-4 text-center text-gray-700">Register</h2>
+    <div className="flex min-h-[70vh] items-center justify-center bg-[#f7fafb] px-5 py-12">
+      <div className="w-full max-w-lg rounded-3xl border border-slate-100 bg-white p-8 shadow-xl shadow-slate-200/60">
+        <div className="mx-auto mb-6 grid h-11 w-11 place-items-center rounded-xl bg-primary text-xl text-white">✦</div>
+        <p className="text-center text-sm font-semibold text-primary">GET STARTED</p>
+        <h1 className="mt-2 text-3xl font-bold text-center text-slate-900">Create your account</h1>
+        <p className="mt-3 mb-7 text-center text-sm text-slate-500">Book trusted help or join the FixItNow professional network.</p>
         {error && <p className="text-red-600 text-sm mb-4 text-center">{error}</p>}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -56,7 +58,7 @@ export default function Register() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-xl border border-slate-200 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-200"
             />
           </div>
           <div>
@@ -66,7 +68,7 @@ export default function Register() {
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               required
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-xl border border-slate-200 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-200"
             />
           </div>
           <div>
@@ -76,7 +78,7 @@ export default function Register() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-xl border border-slate-200 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-200"
             />
           </div>
           <div>
@@ -87,7 +89,7 @@ export default function Register() {
               onChange={(e) => setPassword(e.target.value)}
               required
               minLength={6}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-xl border border-slate-200 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-200"
             />
           </div>
           <div>
@@ -95,7 +97,7 @@ export default function Register() {
             <select
               value={role}
               onChange={(e) => setRole(e.target.value as 'CUSTOMER' | 'PROVIDER')}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-xl border border-slate-200 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-200"
             >
               <option value="CUSTOMER">Customer</option>
               <option value="PROVIDER">Service Provider</option>
@@ -104,14 +106,14 @@ export default function Register() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 disabled:opacity-50"
+            className="w-full rounded-xl bg-primary py-3 font-semibold text-white shadow-sm transition hover:bg-teal-700 disabled:opacity-50"
           >
             {loading ? 'Registering…' : 'Register'}
           </button>
         </form>
         <p className="mt-4 text-center text-sm text-gray-600">
           Already have an account?{' '}
-          <Link to="/login" className="text-blue-600 hover:underline">
+          <Link to="/login" className="font-semibold text-primary hover:underline">
             Login
           </Link>
         </p>

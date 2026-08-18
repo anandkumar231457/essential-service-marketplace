@@ -101,13 +101,13 @@ export default function Track() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white shadow-sm">
-        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
+    <div className="bg-[#f7fafb]">
+      <header className="border-b border-slate-100 bg-white">
+        <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-6 lg:px-8">
           <button onClick={() => navigate('/')} className="text-blue-600 hover:underline">
             ← Home
           </button>
-          <h1 className="text-xl font-bold text-gray-800">Live Tracking</h1>
+          <h1 className="text-xl font-bold text-slate-800">Live service tracking</h1>
           <span
             className={`text-xs px-2 py-1 rounded-full ${
               socketConnected ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
@@ -118,9 +118,10 @@ export default function Track() {
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-4 py-6">
+      <main className="mx-auto max-w-6xl px-5 py-10 lg:px-8">
+        <div className="mb-8"><p className="text-sm font-semibold text-primary">BOOKING STATUS</p><h2 className="mt-1 text-3xl font-bold tracking-tight text-slate-900">Your repair is in motion</h2><p className="mt-2 text-slate-500">Follow your professional’s progress in real time.</p></div>
         {booking && (
-          <div className="mb-4">
+          <div className="mb-6 rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
             <span
               className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${
                 statusColor[booking.status] ?? 'bg-gray-100 text-gray-700'
@@ -132,7 +133,7 @@ export default function Track() {
           </div>
         )}
 
-        <div className="h-[400px] rounded-lg overflow-hidden shadow">
+        <div className="h-[480px] overflow-hidden rounded-2xl border border-slate-100 shadow-sm">
           <MapContainer
             center={[providerStatus?.lat ?? 12.9352, providerStatus?.lng ?? 77.6245]}
             zoom={14}
@@ -158,7 +159,7 @@ export default function Track() {
           <div className="mt-4 text-center">
             <button
               onClick={() => navigate(`/rate/${booking.id}`)}
-              className="bg-green-600 text-white px-6 py-2 rounded-md hover:bg-green-700"
+              className="rounded-xl bg-primary px-6 py-3 font-semibold text-white transition hover:bg-teal-700"
             >
               Rate this service
             </button>
