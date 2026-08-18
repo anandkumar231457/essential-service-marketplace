@@ -281,19 +281,17 @@ app.get('/api/bookings/:bookingId', requireAuth, async (req, res) => {
   return res.json({ booking });
 });
 
-// Open job board — providers see all REQUESTED jobs in their category
+// Open job board — providers see all REQUESTED jobs ready for dispatch
 app.get('/api/bookings/open', requireAuth, requireRole('PROVIDER'), async (_req, res) => {
   try {
-    const user = res.locals.user;
-    const profile = await prisma.providerProfile.findUnique({ where: { userId: user.userId } });
     const openJobs = await prisma.booking.findMany({
       where: {
         status: 'REQUESTED',
-        ...(profile?.category ? { category: { name: profile.category } } : {}),
       },
       include: {
         category: true,
         customer: { select: { name: true, phone: true } },
+        provider: { select: { name: true, phone: true } },
       },
       orderBy: { requestedAt: 'desc' },
     });

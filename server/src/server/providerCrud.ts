@@ -81,13 +81,13 @@ export async function update(req: Request, res: Response) {
 
 /**
  * GET /api/providers/nearby?lat=&lng=&category=&radiusKm=&onlineOnly=
- * Uses PostGIS ST_DWithin + ST_Distance, sorted by distance.
+ * Uses PostGIS ST_DWithin + ST_Distance calculated directly from lat and lng columns.
  * Returns both online and offline verified providers unless onlineOnly=true is requested.
  */
 export async function nearby(req: Request, res: Response) {
   const lat = parseFloat(req.query.lat as string);
   const lng = parseFloat(req.query.lng as string);
-  const radiusKm = parseFloat((req.query.radiusKm as string) ?? '5');
+  const radiusKm = parseFloat((req.query.radiusKm as string) ?? '25');
   const category = req.query.category as string | undefined;
   const onlineOnly = req.query.onlineOnly === 'true';
 
@@ -99,7 +99,7 @@ export async function nearby(req: Request, res: Response) {
   }
 
   const categoryFilter = category
-    ? Prisma.sql`AND pp.category = ${category}`
+    ? Prisma.sql`AND pp.category ILIKE ${category}`
     : Prisma.empty;
 
   const onlineFilter = onlineOnly
@@ -120,7 +120,7 @@ export async function nearby(req: Request, res: Response) {
       pl.lng,
       pl."isOnline",
       ROUND(
-        (ST_Distance(pl.location, ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography) / 1000)::numeric,
+        (ST_Distance(ST_SetSRID(ST_MakePoint(pl.lng, pl.lat), 4326)::geography, ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography) / 1000)::numeric,
         2
       ) AS "distanceKm"
     FROM "ProviderLocation" pl
@@ -128,13 +128,13 @@ export async function nearby(req: Request, res: Response) {
     JOIN "ProviderProfile" pp ON pp."userId" = u.id
     WHERE pp."verifiedStatus" = 'VERIFIED'
       AND ST_DWithin(
-        pl.location,
+        ST_SetSRID(ST_MakePoint(pl.lng, pl.lat), 4326)::geography,
         ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography,
         ${radiusKm * 1000}
       )
       ${categoryFilter}
       ${onlineFilter}
-    ORDER BY ST_Distance(pl.location, ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography)
+    ORDER BY ST_Distance(ST_SetSRID(ST_MakePoint(pl.lng, pl.lat), 4326)::geography, ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography)
     LIMIT 50
   `);
 
