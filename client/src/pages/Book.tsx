@@ -38,7 +38,7 @@ export default function Book() {
         address,
         lat,
         lng,
-        scheduledAt: `${selectedDate} ${selectedSlot}`,
+        scheduledAt: new Date(selectedDate).toISOString(),
       }),
     onSuccess: (data) => {
       navigate(`/booking/${data.booking.id}/confirmed`);

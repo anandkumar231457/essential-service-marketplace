@@ -72,31 +72,44 @@ export async function request(req: Request, res: Response) {
     return res.status(400).json({ error: 'providerId, categoryId, address, lat, lng are required' });
   }
 
-  // Verify provider exists and is verified
-  const provider = await prisma.providerProfile.findUnique({ where: { userId: providerId } });
-  if (!provider || provider.verifiedStatus !== 'VERIFIED') {
-    return res.status(400).json({ error: 'Provider not available' });
+  try {
+    // Verify provider exists and is verified
+    const provider = await prisma.providerProfile.findUnique({ where: { userId: providerId } });
+    if (!provider || provider.verifiedStatus !== 'VERIFIED') {
+      return res.status(400).json({ error: 'Provider not available' });
+    }
+
+    let parsedDate: Date | null = null;
+    if (scheduledAt) {
+      const d = new Date(scheduledAt);
+      if (!isNaN(d.getTime())) {
+        parsedDate = d;
+      }
+    }
+
+    const booking = await prisma.booking.create({
+      data: {
+        customerId: user.userId,
+        providerId,
+        categoryId,
+        address,
+        lat,
+        lng,
+        scheduledAt: parsedDate,
+        status: 'REQUESTED',
+      },
+    });
+
+    // Record initial status history
+    await prisma.bookingStatusHistory.create({
+      data: { bookingId: booking.id, status: 'REQUESTED' },
+    });
+
+    return res.status(201).json({ booking });
+  } catch (err: any) {
+    console.error('Error creating booking request:', err);
+    return res.status(500).json({ error: err.message || 'Failed to create booking request' });
   }
-
-  const booking = await prisma.booking.create({
-    data: {
-      customerId: user.userId,
-      providerId,
-      categoryId,
-      address,
-      lat,
-      lng,
-      scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
-      status: 'REQUESTED',
-    },
-  });
-
-  // Record initial status history
-  await prisma.bookingStatusHistory.create({
-    data: { bookingId: booking.id, status: 'REQUESTED' },
-  });
-
-  return res.status(201).json({ booking });
 }
 
 /** POST /api/bookings/accept — provider accepts (REQUESTED → ACCEPTED). */
