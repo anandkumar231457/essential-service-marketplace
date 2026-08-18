@@ -12,6 +12,11 @@ import History from './pages/History';
 import Review from './pages/Review';
 import BookingConfirmation from './pages/BookingConfirmation';
 import ProviderProfilePage from './pages/ProviderProfile';
+import UserProfile from './pages/UserProfile';
+import ProviderEarnings from './pages/ProviderEarnings';
+import ProviderAvailability from './pages/ProviderAvailability';
+import ProviderCoverage from './pages/ProviderCoverage';
+import MobileNav from './components/MobileNav';
 
 const queryClient = new QueryClient();
 
@@ -29,13 +34,19 @@ function Navigation() {
           <div className="hidden gap-6 text-sm font-medium text-slate-500 md:flex">
             <Link to="/" className="transition hover:text-primary">Explore</Link>
             <Link to="/providers" className="transition hover:text-primary">Find a pro</Link>
-            {user && <Link to={user.role === 'PROVIDER' ? '/provider' : '/history'} className="transition hover:text-primary">{user.role === 'PROVIDER' ? 'My work' : 'My bookings'}</Link>}
+            {user && (
+              <Link to={user.role === 'PROVIDER' ? '/provider' : '/history'} className="transition hover:text-primary">
+                {user.role === 'PROVIDER' ? 'My work' : 'My bookings'}
+              </Link>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-4 text-sm font-medium text-slate-600">
           {user ? (
             <>
-              <span className="hidden sm:inline">Hi, {user.name}</span>
+              <Link to="/profile" className="hidden sm:inline transition hover:text-primary">
+                Hi, {user.name}
+              </Link>
               <button
                 onClick={logout}
                 className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold transition hover:border-primary hover:text-primary"
@@ -59,14 +70,31 @@ function Navigation() {
 
 function Footer() {
   return (
-    <footer className="bg-slate-950 text-slate-400">
+    <footer className="bg-slate-950 text-slate-400 hidden md:block">
       <div className="mx-auto grid max-w-7xl gap-10 px-5 py-14 sm:grid-cols-2 lg:grid-cols-4 lg:px-8">
-        <div><div className="mb-4 flex items-center gap-2 font-bold text-white"><span className="grid h-7 w-7 place-items-center rounded-md bg-primary">✦</span> FixIt<span className="text-primary">Now</span></div><p className="max-w-xs text-sm leading-6">Connecting homeowners with trusted local professionals for every repair, big or small.</p></div>
-        <div><h3 className="mb-4 text-sm font-semibold text-white">Our services</h3><div className="space-y-2 text-sm"><p>Electrical</p><p>Plumbing</p><p>Appliance repair</p><p>Cleaning</p></div></div>
-        <div><h3 className="mb-4 text-sm font-semibold text-white">Company</h3><div className="space-y-2 text-sm"><p>About us</p><p>How it works</p><p>Support</p></div></div>
-        <div><h3 className="mb-4 text-sm font-semibold text-white">For providers</h3><div className="space-y-2 text-sm"><p>Join as a pro</p><p>Provider login</p><p>Resources</p></div></div>
+        <div>
+          <div className="mb-4 flex items-center gap-2 font-bold text-white">
+            <span className="grid h-7 w-7 place-items-center rounded-md bg-primary">✦</span> FixIt<span className="text-primary">Now</span>
+          </div>
+          <p className="max-w-xs text-sm leading-6">Connecting homeowners with trusted local professionals for every repair, big or small.</p>
+        </div>
+        <div>
+          <h3 className="mb-4 text-sm font-semibold text-white">Our services</h3>
+          <div className="space-y-2 text-sm"><p>Electrical</p><p>Plumbing</p><p>Appliance repair</p><p>Cleaning</p></div>
+        </div>
+        <div>
+          <h3 className="mb-4 text-sm font-semibold text-white">Company</h3>
+          <div className="space-y-2 text-sm"><p>About us</p><p>How it works</p><p>Support</p></div>
+        </div>
+        <div>
+          <h3 className="mb-4 text-sm font-semibold text-white">For providers</h3>
+          <div className="space-y-2 text-sm"><p>Join as a pro</p><p>Provider login</p><p>Resources</p></div>
+        </div>
       </div>
-      <div className="mx-auto flex max-w-7xl flex-col gap-3 border-t border-slate-800 px-5 py-5 text-xs sm:flex-row sm:justify-between lg:px-8"><span>© 2026 FixItNow Marketplace. All rights reserved.</span><span>Privacy policy &nbsp; Terms of service</span></div>
+      <div className="mx-auto flex max-w-7xl flex-col gap-3 border-t border-slate-800 px-5 py-5 text-xs sm:flex-row sm:justify-between lg:px-8">
+        <span>© 2026 FixItNow Marketplace. All rights reserved.</span>
+        <span>Privacy policy &nbsp; Terms of service</span>
+      </div>
     </footer>
   );
 }
@@ -90,8 +118,13 @@ function App() {
               <Route path="/history" element={<History />} />
               <Route path="/review/:bookingId" element={<Review />} />
               <Route path="/booking/:bookingId/confirmed" element={<BookingConfirmation />} />
+              <Route path="/profile" element={<UserProfile />} />
+              <Route path="/provider/earnings" element={<ProviderEarnings />} />
+              <Route path="/provider/availability" element={<ProviderAvailability />} />
+              <Route path="/provider/coverage" element={<ProviderCoverage />} />
             </Routes>
           </main>
+          <MobileNav />
           <Footer />
         </div>
       </BrowserRouter>
