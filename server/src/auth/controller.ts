@@ -1,7 +1,43 @@
 import { Request, Response } from 'express';
-import { signAccessToken, signRefreshToken, verifyAccessToken } from '../auth/jwt.js';
+import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../auth/jwt.js';
 import { prisma } from '../lib/prisma.js';
 import { compare as bcryptCompare, hash as bcryptHash } from 'bcrypt';
+
+async function ensureProviderDefaults(userId: string) {
+  try {
+    // Ensure ProviderProfile exists and is VERIFIED
+    await prisma.providerProfile.upsert({
+      where: { userId },
+      create: {
+        userId,
+        category: 'Electrician',
+        skills: ['General Repair', 'Wiring', 'Emergency Service'],
+        hourlyRate: 500,
+        avgRating: 5.0,
+        verifiedStatus: 'VERIFIED',
+      },
+      update: {
+        verifiedStatus: 'VERIFIED',
+      },
+    });
+
+    // Ensure ProviderLocation exists
+    await prisma.providerLocation.upsert({
+      where: { providerId: userId },
+      create: {
+        providerId: userId,
+        lat: 12.9352,
+        lng: 77.6245,
+        isOnline: true,
+      },
+      update: {
+        isOnline: true,
+      },
+    });
+  } catch (err) {
+    console.error('Error ensuring provider defaults:', err);
+  }
+}
 
 export async function register(req: Request, res: Response) {
   const { name, phone, email, password, role } = req.body;
@@ -29,6 +65,10 @@ export async function register(req: Request, res: Response) {
     },
   });
 
+  if (user.role === 'PROVIDER') {
+    await ensureProviderDefaults(user.id);
+  }
+
   const accessToken = signAccessToken(user.id, user.role);
   const refreshToken = signRefreshToken(user.id);
 
@@ -50,6 +90,10 @@ export async function login(req: Request, res: Response) {
   const valid = await bcryptCompare(password, user.passwordHash);
   if (!valid) {
     return res.status(401).json({ error: 'Invalid credentials' });
+  }
+
+  if (user.role === 'PROVIDER') {
+    await ensureProviderDefaults(user.id);
   }
 
   const accessToken = signAccessToken(user.id, user.role);
@@ -88,6 +132,10 @@ export async function googleAuth(req: Request, res: Response) {
     });
   }
 
+  if (user.role === 'PROVIDER') {
+    await ensureProviderDefaults(user.id);
+  }
+
   const accessToken = signAccessToken(user.id, user.role);
   const refreshToken = signRefreshToken(user.id);
 
@@ -101,14 +149,21 @@ export async function googleAuth(req: Request, res: Response) {
 export async function refresh(req: Request, res: Response) {
   const { refreshToken } = req.body;
   if (!refreshToken) {
-    return res.status(401).json({ error: 'Missing refresh token' });
+    return res.status(400).json({ error: 'Refresh token is required' });
   }
 
   try {
-    const payload = verifyAccessToken(refreshToken as string);
-    const newAccessToken = signAccessToken(payload.userId, payload.role);
-    return res.json({ accessToken: newAccessToken });
+    const payload = verifyRefreshToken(refreshToken);
+    const user = await prisma.user.findUnique({ where: { id: payload.userId } });
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    const newAccessToken = signAccessToken(user.id, user.role);
+    const newRefreshToken = signRefreshToken(user.id);
+
+    return res.json({ accessToken: newAccessToken, refreshToken: newRefreshToken });
   } catch {
-    return res.status(403).json({ error: 'Invalid refresh token' });
+    return res.status(401).json({ error: 'Invalid or expired refresh token' });
   }
 }

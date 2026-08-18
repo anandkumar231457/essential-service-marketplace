@@ -81,6 +81,22 @@ export default function Home() {
                 Find a Pro
               </button>
             </form>
+
+            <div className="mt-4 flex flex-wrap gap-3 items-center">
+              <Link
+                to="/post-job"
+                className="inline-flex items-center gap-2 rounded-xl bg-amber-500 px-5 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-amber-600 transition"
+              >
+                <span>🛵 Post a Job (Broadcast to Nearby Pros)</span>
+                <span className="rounded-full bg-amber-600 px-2 py-0.5 text-[10px]">Instant</span>
+              </Link>
+              <Link
+                to="/providers"
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 hover:border-teal-200 hover:text-primary transition"
+              >
+                <span>🔍 Browse All Specialists</span>
+              </Link>
+            </div>
           </div>
 
           <div className="relative mx-auto w-full max-w-lg">

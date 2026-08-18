@@ -17,6 +17,7 @@ import ProviderEarnings from './pages/ProviderEarnings';
 import ProviderAvailability from './pages/ProviderAvailability';
 import ProviderCoverage from './pages/ProviderCoverage';
 import ProviderServices from './pages/ProviderServices';
+import PostJob from './pages/PostJob';
 import MobileNav from './components/MobileNav';
 
 const queryClient = new QueryClient();
@@ -45,6 +46,14 @@ function Navigation() {
         <div className="flex items-center gap-4 text-sm font-medium text-slate-600">
           {user ? (
             <>
+              {user.role !== 'PROVIDER' && (
+                <Link
+                  to="/post-job"
+                  className="rounded-lg bg-amber-500 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-amber-600 hidden sm:inline-flex items-center gap-1"
+                >
+                  🛵 Post a Job
+                </Link>
+              )}
               <Link to="/profile" className="hidden sm:inline transition hover:text-primary">
                 Hi, {user.name}
               </Link>
@@ -124,6 +133,7 @@ function App() {
               <Route path="/provider/availability" element={<ProviderAvailability />} />
               <Route path="/provider/coverage" element={<ProviderCoverage />} />
               <Route path="/provider/services" element={<ProviderServices />} />
+              <Route path="/post-job" element={<PostJob />} />
             </Routes>
           </main>
           <MobileNav />

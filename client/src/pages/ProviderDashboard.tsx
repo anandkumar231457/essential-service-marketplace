@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useAuthStore } from '../store/authStore';
@@ -12,16 +12,46 @@ export default function ProviderDashboard() {
   const [actionError, setActionError] = useState('');
   const [actionSuccess, setActionSuccess] = useState('');
 
+  // Auto-register provider location on first load so they appear in search
+  useEffect(() => {
+    const registerLocation = async () => {
+      try {
+        const coords = await new Promise<{ lat: number; lng: number }>((resolve) => {
+          if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+              (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+              () => resolve({ lat: 12.9352, lng: 77.6245 }) // Koramangala fallback
+            );
+          } else {
+            resolve({ lat: 12.9352, lng: 77.6245 });
+          }
+        });
+        await api.post('/api/providers/ping', { ...coords, isOnline: true });
+      } catch {
+        // ignore
+      }
+    };
+    registerLocation();
+  }, []);
+
   const { data, isLoading } = useQuery({
     queryKey: ['my-bookings'],
     queryFn: () => api.get<{ bookings: HistoryBooking[] }>('/api/bookings/my'),
-    refetchInterval: 5000, // Poll every 5 seconds for new incoming orders
+    refetchInterval: 5000,
+  });
+
+  // Open job board — unassigned jobs matching provider's category
+  const { data: openJobsData } = useQuery({
+    queryKey: ['open-jobs'],
+    queryFn: () => api.get<{ bookings: HistoryBooking[] }>('/api/bookings/open'),
+    refetchInterval: 5000,
   });
 
   const allBookings = data?.bookings ?? [];
   const requestedOrders = allBookings.filter((b) => b.status === 'REQUESTED');
   const activeJobs = allBookings.filter((b) => ['ACCEPTED', 'EN_ROUTE', 'IN_PROGRESS'].includes(b.status));
   const completedJobs = allBookings.filter((b) => b.status === 'COMPLETED');
+  const openJobs = openJobsData?.bookings ?? [];
 
   // Mutation for advancing order lifecycle
   const advanceMutation = useMutation({
@@ -145,7 +175,63 @@ export default function ProviderDashboard() {
           </div>
         </div>
 
-        {/* 1. SWIGGY-STYLE INCOMING ORDERS SECTION */}
+        {/* 0. OPEN JOB BOARD — Swiggy-style unassigned jobs anyone can pick */}
+        {openJobs.length > 0 && (
+          <section className="rounded-3xl border-2 border-violet-300 bg-violet-50/50 p-6 shadow-md space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="grid h-8 w-8 place-items-center rounded-full bg-violet-600 text-white font-bold animate-bounce">
+                  🛵
+                </span>
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900">Open Job Board — Pick Up Near You</h2>
+                  <p className="text-xs text-slate-600">Customers in your area posted jobs — first provider to accept gets the order</p>
+                </div>
+              </div>
+              <span className="rounded-full bg-violet-200 px-3 py-1 text-xs font-bold text-violet-900">
+                {openJobs.length} Open Job{openJobs.length > 1 ? 's' : ''}
+              </span>
+            </div>
+
+            <div className="space-y-4 pt-2">
+              {openJobs.map((job) => (
+                <div key={job.id} className="rounded-2xl border border-violet-200 bg-white p-5 shadow-sm space-y-4">
+                  <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+                    <div>
+                      <span className="rounded-md bg-violet-100 px-2 py-0.5 text-[11px] font-bold text-violet-800">
+                        {job.category?.name || 'Home Service'}
+                      </span>
+                      <h3 className="text-base font-bold text-slate-900 mt-1">
+                        Open Job from {job.customer?.name || 'Customer'}
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">📍 {job.address}</p>
+                      {job.scheduledAt && (
+                        <p className="text-xs text-slate-600 mt-0.5 font-medium">
+                          📅 Needed: {new Date(job.scheduledAt).toLocaleDateString()}
+                        </p>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <p className="text-lg font-bold text-primary">₹500 / hr</p>
+                      <p className="text-[11px] text-slate-400">Est. Payout</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-3 border-t border-slate-100 pt-3">
+                    <button
+                      onClick={() => advanceMutation.mutate({ endpoint: 'accept', bookingId: job.id })}
+                      disabled={advanceMutation.isPending}
+                      className="flex-1 rounded-xl bg-violet-600 py-3 text-xs font-bold text-white shadow-sm transition hover:bg-violet-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                      🛵 Accept & Pick Up This Job
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* 1. SWIGGY-STYLE INCOMING ORDERS SECTION (assigned to me) */}
         {requestedOrders.length > 0 && (
           <section className="rounded-3xl border-2 border-amber-300 bg-amber-50/50 p-6 shadow-md space-y-4">
             <div className="flex items-center justify-between">

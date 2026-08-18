@@ -27,3 +27,8 @@ export function signRefreshToken(userId: string) {
 export function verifyAccessToken(token: string) {
   return verify(token, env.JWT_ACCESS_SECRET) as JwtPayload;
 }
+
+/** Verify a refresh token. Returns payload or throws. */
+export function verifyRefreshToken(token: string) {
+  return verify(token, env.JWT_REFRESH_SECRET) as { userId: string };
+}
