@@ -29,5 +29,5 @@ COPY --from=builder /app/package.json ./package.json
 # The app listens on PORT (default 4000).
 EXPOSE 4000
 
-# Apply pending migrations, then start the compiled server.
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/index.js"]
+# Apply pending schema changes, then start the compiled server.
+CMD ["sh", "-c", "npx prisma db push --skip-generate && node dist/index.js"]
