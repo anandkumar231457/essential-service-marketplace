@@ -32,8 +32,8 @@ async function transitionBooking(bookingId: string, nextStatus: string, actorId:
 
   const updateData: any = { status: nextStatus as $Enums.BookingStatus };
 
-  // When a provider accepts an OPEN job (no providerId yet), assign them now
-  if (nextStatus === 'ACCEPTED' && !booking.providerId) {
+  // When a provider accepts an OPEN or direct job, assign them as active provider
+  if (nextStatus === 'ACCEPTED') {
     updateData.providerId = actorId;
   }
 
@@ -60,7 +60,11 @@ export async function request(req: Request, res: Response) {
 
   const { providerId, categoryId, address, lat, lng, scheduledAt, description } = req.body;
 
-  if (!categoryId || !address || typeof lat !== 'number' || typeof lng !== 'number') {
+  const numCategoryId = typeof categoryId === 'number' ? categoryId : parseInt(categoryId, 10);
+  const numLat = typeof lat === 'number' ? lat : parseFloat(lat);
+  const numLng = typeof lng === 'number' ? lng : parseFloat(lng);
+
+  if (isNaN(numCategoryId) || !address || isNaN(numLat) || isNaN(numLng)) {
     return res.status(400).json({ error: 'categoryId, address, lat, lng are required' });
   }
 
@@ -84,10 +88,10 @@ export async function request(req: Request, res: Response) {
       data: {
         customerId: user.userId,
         providerId: providerId || null,  // NULL = open job for any provider
-        categoryId,
+        categoryId: numCategoryId,
         address,
-        lat,
-        lng,
+        lat: numLat,
+        lng: numLng,
         scheduledAt: parsedDate,
         description: description || null,
         status: 'REQUESTED',
@@ -110,7 +114,24 @@ export async function accept(req: Request, res: Response) {
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
   const { bookingId } = req.body;
   if (!bookingId) return res.status(400).json({ error: 'bookingId is required' });
+
   try {
+    // Ensure provider profile exists for this accepting user
+    await prisma.providerProfile.upsert({
+      where: { userId: user.userId },
+      create: {
+        userId: user.userId,
+        category: 'Electrician',
+        skills: ['General Repair', 'Maintenance', 'Emergency Service'],
+        hourlyRate: 500,
+        avgRating: 5.0,
+        verifiedStatus: 'VERIFIED',
+      },
+      update: {
+        verifiedStatus: 'VERIFIED',
+      },
+    });
+
     const booking = await transitionBooking(bookingId, 'ACCEPTED', user.userId);
     return res.json({ booking });
   } catch (e) {

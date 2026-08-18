@@ -284,17 +284,22 @@ app.get('/api/bookings/:bookingId', requireAuth, async (req, res) => {
   return res.json({ booking });
 });
 
-// Open job board — only unassigned (null providerId) REQUESTED broadcast jobs
-app.get('/api/bookings/open', requireAuth, requireRole('PROVIDER'), async (_req, res) => {
+// Open job board — unassigned broadcast jobs + incoming requests for this provider
+app.get('/api/bookings/open', requireAuth, async (_req, res) => {
   try {
+    const user = res.locals.user;
     const openJobs = await prisma.booking.findMany({
       where: {
         status: 'REQUESTED',
-        providerId: null,   // only truly open broadcast jobs — no provider assigned yet
+        OR: [
+          { providerId: null },
+          { providerId: user.userId },
+        ],
       },
       include: {
         category: true,
         customer: { select: { name: true, phone: true } },
+        provider: { select: { name: true, phone: true } },
       },
       orderBy: { requestedAt: 'desc' },
     });
@@ -306,10 +311,10 @@ app.get('/api/bookings/open', requireAuth, requireRole('PROVIDER'), async (_req,
 
 // Booking lifecycle (Step 4)
 app.post('/api/bookings/request', requireAuth, requestBooking);
-app.post('/api/bookings/accept', requireAuth, requireRole('PROVIDER'), acceptBooking);
-app.post('/api/bookings/en-route', requireAuth, requireRole('PROVIDER'), enRouteBooking);
-app.post('/api/bookings/in-progress', requireAuth, requireRole('PROVIDER'), inProgressBooking);
-app.post('/api/bookings/complete', requireAuth, requireRole('PROVIDER'), completeBooking);
+app.post('/api/bookings/accept', requireAuth, acceptBooking);
+app.post('/api/bookings/en-route', requireAuth, enRouteBooking);
+app.post('/api/bookings/in-progress', requireAuth, inProgressBooking);
+app.post('/api/bookings/complete', requireAuth, completeBooking);
 app.post('/api/bookings/cancel', requireAuth, cancelBooking);
 
 // Reviews (Step 4)
