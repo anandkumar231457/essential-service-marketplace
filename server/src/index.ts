@@ -17,6 +17,9 @@ import { create as createReview } from './server/reviews.js';
 const app = express();
 const server = createServer(app);
 
+// Enable trust proxy for Render / Vercel reverse proxy forwarding
+app.set('trust proxy', 1);
+
 // ── Security & logging middleware ────────────────────────────────────────
 app.use(helmet());
 
@@ -38,19 +41,19 @@ app.use(
 app.use(express.json());
 
 // ── Rate limiting ────────────────────────────────────────────────────────
-// General API limiter: 100 requests / 15 min / IP.
+// Generous API limiter: 1000 requests / 15 min / IP to prevent blocking during active usage & polling.
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 100,
+  limit: 1000,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' },
 });
 
-// Stricter limiter for auth endpoints (brute-force protection).
+// Auth limiter: 200 attempts / 15 min / IP.
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 20,
+  limit: 200,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many auth attempts, please try again later.' },
