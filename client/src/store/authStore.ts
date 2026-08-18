@@ -7,6 +7,9 @@ export interface AuthUser {
   phone: string;
   email: string;
   role: 'CUSTOMER' | 'PROVIDER' | 'ADMIN';
+  address?: string | null;
+  lat?: number | null;
+  lng?: number | null;
 }
 
 interface AuthState {
@@ -15,6 +18,7 @@ interface AuthState {
   refreshToken: string | null;
   setAuth: (user: AuthUser, accessToken: string, refreshToken: string) => void;
   setAccessToken: (token: string) => void;
+  updateUser: (partialUser: Partial<AuthUser>) => void;
   logout: () => void;
 }
 
@@ -27,6 +31,10 @@ export const useAuthStore = create<AuthState>()(
       setAuth: (user, accessToken, refreshToken) =>
         set({ user, accessToken, refreshToken }),
       setAccessToken: (accessToken) => set({ accessToken }),
+      updateUser: (partialUser) =>
+        set((state) => ({
+          user: state.user ? { ...state.user, ...partialUser } : null,
+        })),
       logout: () => set({ user: null, accessToken: null, refreshToken: null }),
     }),
     { name: 'auth-storage' },

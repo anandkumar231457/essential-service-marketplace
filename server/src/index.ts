@@ -147,6 +147,45 @@ app.get('/api/categories', async (_req, res) => {
   }
 });
 
+// User Profile CRUD
+app.get('/api/users/me', requireAuth, async (_req, res) => {
+  try {
+    const user = res.locals.user;
+    const profile = await prisma.user.findUnique({
+      where: { id: user.userId },
+      select: { id: true, name: true, phone: true, email: true, role: true, address: true, lat: true, lng: true },
+    });
+    if (!profile) return res.status(404).json({ error: 'User not found' });
+    res.json({ user: profile });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to fetch user profile' });
+  }
+});
+
+app.put('/api/users/me', requireAuth, async (req, res) => {
+  try {
+    const user = res.locals.user;
+    const { name, phone, email, address, lat, lng } = req.body;
+
+    const updated = await prisma.user.update({
+      where: { id: user.userId },
+      data: {
+        ...(name !== undefined && { name }),
+        ...(phone !== undefined && { phone }),
+        ...(email !== undefined && { email }),
+        ...(address !== undefined && { address }),
+        ...(typeof lat === 'number' && { lat }),
+        ...(typeof lng === 'number' && { lng }),
+      },
+      select: { id: true, name: true, phone: true, email: true, role: true, address: true, lat: true, lng: true },
+    });
+
+    res.json({ user: updated });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to update user profile' });
+  }
+});
+
 // Protected: provider profile CRUD
 app.post('/api/providers', requireAuth, requireRole('PROVIDER'), createProvider);
 app.get('/api/providers/me', requireAuth, readProvider);

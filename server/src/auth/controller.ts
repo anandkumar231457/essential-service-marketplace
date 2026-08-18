@@ -40,7 +40,7 @@ async function ensureProviderDefaults(userId: string) {
 }
 
 export async function register(req: Request, res: Response) {
-  const { name, phone, email, password, role } = req.body;
+  const { name, phone, email, password, role, address, lat, lng } = req.body;
   const userRole = role === 'PROVIDER' ? 'PROVIDER' : 'CUSTOMER';
 
   const existing = await prisma.user.findUnique({ where: { email } });
@@ -62,6 +62,9 @@ export async function register(req: Request, res: Response) {
       email,
       passwordHash,
       role: userRole,
+      address: address || null,
+      lat: typeof lat === 'number' ? lat : null,
+      lng: typeof lng === 'number' ? lng : null,
     },
   });
 
@@ -73,7 +76,16 @@ export async function register(req: Request, res: Response) {
   const refreshToken = signRefreshToken(user.id);
 
   return res.status(201).json({
-    user: { id: user.id, name: user.name, phone: user.phone, email: user.email, role: user.role },
+    user: {
+      id: user.id,
+      name: user.name,
+      phone: user.phone,
+      email: user.email,
+      role: user.role,
+      address: user.address,
+      lat: user.lat,
+      lng: user.lng,
+    },
     accessToken,
     refreshToken,
   });
@@ -100,7 +112,16 @@ export async function login(req: Request, res: Response) {
   const refreshToken = signRefreshToken(user.id);
 
   return res.json({
-    user: { id: user.id, name: user.name, phone: user.phone, email: user.email, role: user.role },
+    user: {
+      id: user.id,
+      name: user.name,
+      phone: user.phone,
+      email: user.email,
+      role: user.role,
+      address: user.address,
+      lat: user.lat,
+      lng: user.lng,
+    },
     accessToken,
     refreshToken,
   });
@@ -140,7 +161,16 @@ export async function googleAuth(req: Request, res: Response) {
   const refreshToken = signRefreshToken(user.id);
 
   return res.json({
-    user: { id: user.id, name: user.name, phone: user.phone, email: user.email, role: user.role },
+    user: {
+      id: user.id,
+      name: user.name,
+      phone: user.phone,
+      email: user.email,
+      role: user.role,
+      address: user.address,
+      lat: user.lat,
+      lng: user.lng,
+    },
     accessToken,
     refreshToken,
   });

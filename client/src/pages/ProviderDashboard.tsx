@@ -12,15 +12,17 @@ export default function ProviderDashboard() {
   const [actionError, setActionError] = useState('');
   const [actionSuccess, setActionSuccess] = useState('');
 
-  // Auto-register provider location on first load so they appear in search
+  // Auto-register provider location on load so provider appears on customer search
   useEffect(() => {
     const registerLocation = async () => {
       try {
         const coords = await new Promise<{ lat: number; lng: number }>((resolve) => {
-          if (navigator.geolocation) {
+          if (typeof user?.lat === 'number' && typeof user?.lng === 'number') {
+            resolve({ lat: user.lat, lng: user.lng });
+          } else if (navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(
               (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-              () => resolve({ lat: 12.9352, lng: 77.6245 }) // Koramangala fallback
+              () => resolve({ lat: 12.9352, lng: 77.6245 })
             );
           } else {
             resolve({ lat: 12.9352, lng: 77.6245 });
@@ -32,19 +34,19 @@ export default function ProviderDashboard() {
       }
     };
     registerLocation();
-  }, []);
+  }, [user]);
 
   const { data, isLoading } = useQuery({
     queryKey: ['my-bookings'],
     queryFn: () => api.get<{ bookings: HistoryBooking[] }>('/api/bookings/my'),
-    refetchInterval: 5000,
+    refetchInterval: 3000,
   });
 
-  // Open job board — unassigned jobs matching provider's category
+  // Open job board — unassigned jobs / open orders in area
   const { data: openJobsData } = useQuery({
     queryKey: ['open-jobs'],
     queryFn: () => api.get<{ bookings: HistoryBooking[] }>('/api/bookings/open'),
-    refetchInterval: 5000,
+    refetchInterval: 3000,
   });
 
   const allBookings = data?.bookings ?? [];
@@ -60,6 +62,7 @@ export default function ProviderDashboard() {
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['my-bookings'] });
+      queryClient.invalidateQueries({ queryKey: ['open-jobs'] });
       setActionError('');
       const actionName =
         variables.endpoint === 'accept'
@@ -83,7 +86,9 @@ export default function ProviderDashboard() {
   const setAvailability = async () => {
     const next = !available;
     try {
-      await api.post('/api/providers/ping', { lat: 12.9352, lng: 77.6245, isOnline: next });
+      const lat = user?.lat || 12.9352;
+      const lng = user?.lng || 77.6245;
+      await api.post('/api/providers/ping', { lat, lng, isOnline: next });
     } catch {
       // ignore mock ping
     }
@@ -158,7 +163,7 @@ export default function ProviderDashboard() {
         <div className="grid gap-4 md:grid-cols-3">
           <div className="rounded-2xl bg-amber-500 p-6 text-white shadow-sm">
             <p className="text-xs font-medium text-amber-100 uppercase tracking-wide">Pending Customer Requests</p>
-            <p className="mt-2 text-4xl font-bold">{requestedOrders.length}</p>
+            <p className="mt-2 text-4xl font-bold">{requestedOrders.length + openJobs.length}</p>
             <p className="mt-2 text-xs text-amber-100">Ready to accept & pick up</p>
           </div>
 
@@ -185,11 +190,11 @@ export default function ProviderDashboard() {
                 </span>
                 <div>
                   <h2 className="text-lg font-bold text-slate-900">Open Job Board — Pick Up Near You</h2>
-                  <p className="text-xs text-slate-600">Customers in your area posted jobs — first provider to accept gets the order</p>
+                  <p className="text-xs text-slate-600">Customers in your area posted jobs — tap Accept to take the order</p>
                 </div>
               </div>
               <span className="rounded-full bg-violet-200 px-3 py-1 text-xs font-bold text-violet-900">
-                {openJobs.length} Open Job{openJobs.length > 1 ? 's' : ''}
+                {openJobs.length} Available Request{openJobs.length > 1 ? 's' : ''}
               </span>
             </div>
 
@@ -202,12 +207,12 @@ export default function ProviderDashboard() {
                         {job.category?.name || 'Home Service'}
                       </span>
                       <h3 className="text-base font-bold text-slate-900 mt-1">
-                        Open Job from {job.customer?.name || 'Customer'}
+                        Service Order from {job.customer?.name || 'Customer'}
                       </h3>
-                      <p className="text-xs text-slate-500 mt-0.5">📍 {job.address}</p>
+                      <p className="text-xs text-slate-500 mt-0.5">📍 Address: {job.address}</p>
                       {job.scheduledAt && (
                         <p className="text-xs text-slate-600 mt-0.5 font-medium">
-                          📅 Needed: {new Date(job.scheduledAt).toLocaleDateString()}
+                          📅 Scheduled: {new Date(job.scheduledAt).toLocaleString()}
                         </p>
                       )}
                     </div>
@@ -231,7 +236,7 @@ export default function ProviderDashboard() {
           </section>
         )}
 
-        {/* 1. SWIGGY-STYLE INCOMING ORDERS SECTION (assigned to me) */}
+        {/* 1. DIRECT INCOMING ORDERS SECTION (assigned to this provider) */}
         {requestedOrders.length > 0 && (
           <section className="rounded-3xl border-2 border-amber-300 bg-amber-50/50 p-6 shadow-md space-y-4">
             <div className="flex items-center justify-between">
@@ -240,12 +245,12 @@ export default function ProviderDashboard() {
                   ⚡
                 </span>
                 <div>
-                  <h2 className="text-lg font-bold text-slate-900">Incoming Orders — Pick Up Available</h2>
-                  <p className="text-xs text-slate-600">Customers waiting for service dispatch nearby</p>
+                  <h2 className="text-lg font-bold text-slate-900">Direct Customer Bookings</h2>
+                  <p className="text-xs text-slate-600">Customers selected you specifically for service</p>
                 </div>
               </div>
               <span className="rounded-full bg-amber-200 px-3 py-1 text-xs font-bold text-amber-900">
-                {requestedOrders.length} New Request{requestedOrders.length > 1 ? 's' : ''}
+                {requestedOrders.length} New Booking{requestedOrders.length > 1 ? 's' : ''}
               </span>
             </div>
 
@@ -289,7 +294,7 @@ export default function ProviderDashboard() {
                     <button
                       onClick={() => advanceMutation.mutate({ endpoint: 'cancel', bookingId: order.id })}
                       disabled={advanceMutation.isPending}
-                      className="rounded-xl border border-slate-200 px-5 py-3 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                      className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50"
                     >
                       Decline
                     </button>
@@ -297,6 +302,27 @@ export default function ProviderDashboard() {
                 </div>
               ))}
             </div>
+          </section>
+        )}
+
+        {/* Dispatch Listener status when no active requests */}
+        {openJobs.length === 0 && requestedOrders.length === 0 && (
+          <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="relative flex h-3 w-3">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+              </span>
+              <div>
+                <p className="text-xs font-bold text-slate-800">Dispatch Radar Active</p>
+                <p className="text-[11px] text-slate-500">
+                  Listening for new customer service requests nearby. When a customer books or posts a job, it will pop up here instantly.
+                </p>
+              </div>
+            </div>
+            <span className="rounded-full bg-emerald-50 px-3 py-1 text-[10px] font-bold text-emerald-700 border border-emerald-200">
+              Live Sync
+            </span>
           </section>
         )}
 
