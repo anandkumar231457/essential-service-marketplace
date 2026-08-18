@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
+import { useMutation } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
 import { io, Socket } from 'socket.io-client';
 import { api } from '../lib/api';
+import { useAuthStore } from '../store/authStore';
 import type { Booking } from '../types';
 
 // Fix default marker icons
@@ -32,6 +34,11 @@ export default function Track() {
   const [booking, setBooking] = useState<Booking | null>(null);
   const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null);
   const [socketConnected, setSocketConnected] = useState(false);
+  const user = useAuthStore((state) => state.user);
+  const transition = useMutation({
+    mutationFn: (endpoint: string) => api.post<{ booking: Booking }>(endpoint, { bookingId }),
+    onSuccess: (data) => setBooking(data.booking),
+  });
 
   // Fetch booking details
   useEffect(() => {
@@ -99,6 +106,12 @@ export default function Track() {
     CANCELLED: 'bg-red-100 text-red-800',
     REJECTED: 'bg-red-100 text-red-800',
   };
+  const providerAction: Record<string, { endpoint: string; label: string }> = {
+    REQUESTED: { endpoint: '/api/bookings/accept', label: 'Accept request' },
+    ACCEPTED: { endpoint: '/api/bookings/en-route', label: 'Start travel' },
+    EN_ROUTE: { endpoint: '/api/bookings/in-progress', label: 'Mark arrived' },
+    IN_PROGRESS: { endpoint: '/api/bookings/complete', label: 'Complete service' },
+  };
 
   return (
     <div className="bg-[#f7fafb]">
@@ -130,6 +143,8 @@ export default function Track() {
               {booking.status}
             </span>
             <p className="mt-2 text-sm text-gray-600">{booking.address}</p>
+            {user?.role === 'PROVIDER' && providerAction[booking.status] && <button onClick={() => transition.mutate(providerAction[booking.status].endpoint)} disabled={transition.isPending} className="mt-4 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{transition.isPending ? 'Updating…' : providerAction[booking.status].label}</button>}
+            {transition.isError && <p className="mt-3 text-sm text-red-600">{(transition.error as Error).message}</p>}
           </div>
         )}
 
@@ -158,7 +173,7 @@ export default function Track() {
         {booking?.status === 'COMPLETED' && (
           <div className="mt-4 text-center">
             <button
-              onClick={() => navigate(`/rate/${booking.id}`)}
+              onClick={() => navigate(`/review/${booking.id}`)}
               className="rounded-xl bg-primary px-6 py-3 font-semibold text-white transition hover:bg-teal-700"
             >
               Rate this service

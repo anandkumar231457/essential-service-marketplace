@@ -34,9 +34,10 @@ function validateTransition(current: string, next: string): string | null {
 }
 
 /** Update booking status + append to status history (audit trail). */
-async function transitionBooking(bookingId: string, nextStatus: string) {
+async function transitionBooking(bookingId: string, nextStatus: string, providerId?: string) {
   const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
   if (!booking) throw new Error('Booking not found');
+  if (providerId && booking.providerId !== providerId) throw new Error('This booking is not assigned to you');
 
   const error = validateTransition(booking.status, nextStatus);
   if (error) throw new Error(error);
@@ -107,7 +108,7 @@ export async function accept(req: Request, res: Response) {
   if (!bookingId) return res.status(400).json({ error: 'bookingId is required' });
 
   try {
-    const booking = await transitionBooking(bookingId, 'ACCEPTED');
+    const booking = await transitionBooking(bookingId, 'ACCEPTED', user.userId);
     return res.json({ booking });
   } catch (e) {
     return res.status(400).json({ error: (e as Error).message });
@@ -123,7 +124,7 @@ export async function enRoute(req: Request, res: Response) {
   if (!bookingId) return res.status(400).json({ error: 'bookingId is required' });
 
   try {
-    const booking = await transitionBooking(bookingId, 'EN_ROUTE');
+    const booking = await transitionBooking(bookingId, 'EN_ROUTE', user.userId);
     return res.json({ booking });
   } catch (e) {
     return res.status(400).json({ error: (e as Error).message });
@@ -139,7 +140,7 @@ export async function inProgress(req: Request, res: Response) {
   if (!bookingId) return res.status(400).json({ error: 'bookingId is required' });
 
   try {
-    const booking = await transitionBooking(bookingId, 'IN_PROGRESS');
+    const booking = await transitionBooking(bookingId, 'IN_PROGRESS', user.userId);
     return res.json({ booking });
   } catch (e) {
     return res.status(400).json({ error: (e as Error).message });
@@ -155,7 +156,7 @@ export async function complete(req: Request, res: Response) {
   if (!bookingId) return res.status(400).json({ error: 'bookingId is required' });
 
   try {
-    const booking = await transitionBooking(bookingId, 'COMPLETED');
+    const booking = await transitionBooking(bookingId, 'COMPLETED', user.userId);
     return res.json({ booking });
   } catch (e) {
     return res.status(400).json({ error: (e as Error).message });

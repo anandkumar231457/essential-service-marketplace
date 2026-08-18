@@ -78,6 +78,10 @@ const providerSockets = new Map<string, string>();
 io.on('connection', (socket: Socket) => {
   console.log('Client connected:', socket.id);
 
+  socket.on('join-booking-room', (bookingId: string) => {
+    socket.join(`booking-room:${bookingId}`);
+  });
+
   // Provider joins their personal room
   socket.on('set-provider-id', (providerId: string) => {
     providerSockets.set(providerId, socket.id);
@@ -150,6 +154,16 @@ app.put('/api/providers/me', requireAuth, requireRole('PROVIDER'), updateProvide
 // Nearby provider search — public, no auth required
 app.get('/api/providers/nearby', nearbyProviders);
 
+// Public provider detail used by the customer profile screen.
+app.get('/api/providers/:id', async (req, res) => {
+  const profile = await prisma.providerProfile.findUnique({
+    where: { userId: req.params.id },
+    include: { user: { select: { name: true, phone: true } } },
+  });
+  if (!profile || profile.verifiedStatus !== 'VERIFIED') return res.status(404).json({ error: 'Provider not found' });
+  return res.json({ profile });
+});
+
 // Provider ping endpoint (Socket.io message + REST fallback)
 app.post('/api/providers/ping', requireAuth, requireRole('PROVIDER'), async (req, res) => {
   try {
@@ -202,6 +216,29 @@ app.get('/api/providers/:id/status', async (req, res) => {
   } catch {
     res.status(500).json({ error: 'Failed to fetch provider status' });
   }
+});
+
+// Booking reads used by customer history, provider work queues, and live tracking.
+app.get('/api/bookings/my', requireAuth, async (_req, res) => {
+  const user = res.locals.user;
+  const isProvider = user.role === 'PROVIDER';
+  const bookings = await prisma.booking.findMany({
+    where: isProvider ? { providerId: user.userId } : { customerId: user.userId },
+    include: { category: true, customer: { select: { name: true, phone: true } }, provider: { select: { name: true, phone: true } }, review: true },
+    orderBy: { requestedAt: 'desc' },
+  });
+  res.json({ bookings });
+});
+
+app.get('/api/bookings/:bookingId', requireAuth, async (req, res) => {
+  const user = res.locals.user;
+  const booking = await prisma.booking.findUnique({
+    where: { id: req.params.bookingId },
+    include: { category: true, customer: { select: { name: true, phone: true } }, provider: { select: { name: true, phone: true } }, review: true, statusHistory: { orderBy: { changedAt: 'asc' } } },
+  });
+  if (!booking) return res.status(404).json({ error: 'Booking not found' });
+  if (booking.customerId !== user.userId && booking.providerId !== user.userId) return res.status(403).json({ error: 'Not authorized for this booking' });
+  return res.json({ booking });
 });
 
 // Booking lifecycle (Step 4)

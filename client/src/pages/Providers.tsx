@@ -1,13 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
-import { api } from '../lib/api';
-import type { NearbyProvider } from '../types';
-
-// Fix default marker icons (Leaflet's default icons break under bundlers)
 import icon from 'leaflet/dist/images/marker-icon.png';
 import iconShadow from 'leaflet/dist/images/marker-shadow.png';
+import { api } from '../lib/api';
+import type { NearbyProvider } from '../types';
 
 const defaultIcon = L.icon({
   iconUrl: icon,
@@ -15,7 +13,6 @@ const defaultIcon = L.icon({
   iconSize: [25, 41],
   iconAnchor: [12, 41],
 });
-
 L.Marker.prototype.options.icon = defaultIcon;
 
 // Bengaluru center (Koramangala)
@@ -99,6 +96,7 @@ export default function Providers() {
                   </div>
                   <div className="text-right">
                     <div className="font-bold text-blue-600">₹{p.hourlyRate}/hr</div>
+                    <Link to={`/providers/${p.providerId}`} className="mt-3 mr-2 inline-block rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700">Profile</Link>
                     <button
                       onClick={() => navigate(`/book/${p.providerId}?category=${encodeURIComponent(p.category)}`)}
                       className="mt-3 rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-white transition hover:bg-teal-700"

@@ -34,7 +34,7 @@ export default function Register() {
         role,
       });
       setAuth(data.user, data.accessToken, data.refreshToken);
-      navigate(data.user.role === 'PROVIDER' ? '/providers' : '/');
+      navigate(data.user.role === 'PROVIDER' ? '/provider' : '/');
     } catch (err: any) {
       setError(err.message || 'Registration failed');
     } finally {

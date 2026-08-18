@@ -7,6 +7,11 @@ import Book from './pages/Book';
 import Track from './pages/Track';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import ProviderDashboard from './pages/ProviderDashboard';
+import History from './pages/History';
+import Review from './pages/Review';
+import BookingConfirmation from './pages/BookingConfirmation';
+import ProviderProfilePage from './pages/ProviderProfile';
 
 const queryClient = new QueryClient();
 
@@ -24,6 +29,7 @@ function Navigation() {
           <div className="hidden gap-6 text-sm font-medium text-slate-500 md:flex">
             <Link to="/" className="transition hover:text-primary">Explore</Link>
             <Link to="/providers" className="transition hover:text-primary">Find a pro</Link>
+            {user && <Link to={user.role === 'PROVIDER' ? '/provider' : '/history'} className="transition hover:text-primary">{user.role === 'PROVIDER' ? 'My work' : 'My bookings'}</Link>}
           </div>
         </div>
         <div className="flex items-center gap-4 text-sm font-medium text-slate-600">
@@ -75,10 +81,15 @@ function App() {
             <Routes>
               <Route path="/" element={<Home />} />
               <Route path="/providers" element={<Providers />} />
+              <Route path="/providers/:providerId" element={<ProviderProfilePage />} />
               <Route path="/book/:providerId" element={<Book />} />
               <Route path="/track/:bookingId" element={<Track />} />
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />
+              <Route path="/provider" element={<ProviderDashboard />} />
+              <Route path="/history" element={<History />} />
+              <Route path="/review/:bookingId" element={<Review />} />
+              <Route path="/booking/:bookingId/confirmed" element={<BookingConfirmation />} />
             </Routes>
           </main>
           <Footer />

@@ -4,7 +4,8 @@ import { prisma } from '../lib/prisma.js';
 import { compare as bcryptCompare, hash as bcryptHash } from 'bcrypt';
 
 export async function register(req: Request, res: Response) {
-  const { name, phone, email, password } = req.body;
+  const { name, phone, email, password, role } = req.body;
+  const userRole = role === 'PROVIDER' ? 'PROVIDER' : 'CUSTOMER';
 
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) {
@@ -24,7 +25,7 @@ export async function register(req: Request, res: Response) {
       phone,
       email,
       passwordHash,
-      role: 'CUSTOMER',
+      role: userRole,
     },
   });
 

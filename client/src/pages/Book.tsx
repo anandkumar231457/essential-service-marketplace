@@ -36,7 +36,7 @@ export default function Book() {
         lng,
       }),
     onSuccess: (data) => {
-      navigate(`/track/${data.booking.id}`);
+      navigate(`/booking/${data.booking.id}/confirmed`);
     },
     onError: (err: any) => setError(err.message || 'Booking failed'),
   });
