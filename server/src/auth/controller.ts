@@ -62,6 +62,42 @@ export async function login(req: Request, res: Response) {
   });
 }
 
+export async function googleAuth(req: Request, res: Response) {
+  const { name, email, role } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required for Google Sign-In' });
+  }
+
+  let user = await prisma.user.findUnique({ where: { email } });
+
+  if (!user) {
+    const userRole = role === 'PROVIDER' ? 'PROVIDER' : 'CUSTOMER';
+    const randomPassword = Math.random().toString(36).slice(-10);
+    const passwordHash = await bcryptHash(randomPassword, 10);
+    const phone = `+91-G-${Math.floor(1000000000 + Math.random() * 9000000000)}`;
+
+    user = await prisma.user.create({
+      data: {
+        name: name || 'Google User',
+        phone,
+        email,
+        passwordHash,
+        role: userRole,
+      },
+    });
+  }
+
+  const accessToken = signAccessToken(user.id, user.role);
+  const refreshToken = signRefreshToken(user.id);
+
+  return res.json({
+    user: { id: user.id, name: user.name, phone: user.phone, email: user.email, role: user.role },
+    accessToken,
+    refreshToken,
+  });
+}
+
 export async function refresh(req: Request, res: Response) {
   const { refreshToken } = req.body;
   if (!refreshToken) {

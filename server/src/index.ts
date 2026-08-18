@@ -9,7 +9,7 @@ import { Server as SocketIOServer, Socket } from 'socket.io';
 import { env } from './config/env.js';
 import { prisma } from './lib/prisma.js';
 import { requireAuth, requireRole } from './auth/middleware.js';
-import { register, login, refresh } from './auth/controller.js';
+import { register, login, refresh, googleAuth } from './auth/controller.js';
 import { create as createProvider, read as readProvider, update as updateProvider, nearby as nearbyProviders } from './server/providerCrud.js';
 import { request as requestBooking, accept as acceptBooking, enRoute as enRouteBooking, inProgress as inProgressBooking, complete as completeBooking, cancel as cancelBooking } from './server/bookingLifecycle.js';
 import { create as createReview } from './server/reviews.js';
@@ -132,6 +132,7 @@ function emitProviderStatus(providerId: string, isOnline: boolean, lat?: number,
 // Auth routes (stricter rate limit)
 app.post('/api/auth/register', authLimiter, register);
 app.post('/api/auth/login', authLimiter, login);
+app.post('/api/auth/google', authLimiter, googleAuth);
 app.post('/api/auth/refresh', authLimiter, refresh);
 
 // Service categories (public)
