@@ -15,6 +15,7 @@ export default function Book() {
   const [address, setAddress] = useState('');
   const [lat, setLat] = useState(12.9352); // Koramangala default
   const [lng, setLng] = useState(77.6245);
+  const [gpsStatus, setGpsStatus] = useState('');
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedSlot, setSelectedSlot] = useState('09:00 AM - 10:00 AM');
   const [notes, setNotes] = useState('');
@@ -29,6 +30,24 @@ export default function Book() {
   const categoryId = categoriesData?.categories.find(
     (c) => c.name.toLowerCase() === category.toLowerCase(),
   )?.id;
+
+  const handleUseCurrentLocation = () => {
+    if (navigator.geolocation) {
+      setGpsStatus('Detecting GPS location...');
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setLat(pos.coords.latitude);
+          setLng(pos.coords.longitude);
+          setGpsStatus(`📍 Location detected (${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)})`);
+        },
+        () => {
+          setGpsStatus('⚠️ Mobile GPS permission denied. Using address location.');
+        }
+      );
+    } else {
+      setGpsStatus('⚠️ Geolocation unavailable on browser.');
+    }
+  };
 
   const bookMutation = useMutation({
     mutationFn: () =>
@@ -83,9 +102,18 @@ export default function Book() {
           {/* Address & Location Inputs */}
           <div className="space-y-4 pt-4 border-t border-slate-100">
             <div>
-              <label className="block text-xs font-bold uppercase tracking-wide text-slate-700 mb-1">
-                Service Address *
-              </label>
+              <div className="flex justify-between items-center mb-1">
+                <label className="block text-xs font-bold uppercase tracking-wide text-slate-700">
+                  Service Address *
+                </label>
+                <button
+                  type="button"
+                  onClick={handleUseCurrentLocation}
+                  className="text-xs font-semibold text-primary hover:underline flex items-center gap-1"
+                >
+                  📍 Use Mobile GPS Location
+                </button>
+              </div>
               <input
                 type="text"
                 value={address}
@@ -93,29 +121,7 @@ export default function Book() {
                 placeholder="e.g. 12, 5th Block, Koramangala, Bengaluru"
                 className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-200"
               />
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wide text-slate-700 mb-1">Latitude</label>
-                <input
-                  type="number"
-                  step="0.0001"
-                  value={lat}
-                  onChange={(e) => setLat(parseFloat(e.target.value))}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-200"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wide text-slate-700 mb-1">Longitude</label>
-                <input
-                  type="number"
-                  step="0.0001"
-                  value={lng}
-                  onChange={(e) => setLng(parseFloat(e.target.value))}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-200"
-                />
-              </div>
+              {gpsStatus && <p className="mt-1 text-xs text-slate-500 font-medium">{gpsStatus}</p>}
             </div>
 
             <div>
