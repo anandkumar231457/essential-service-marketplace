@@ -14,14 +14,14 @@ declare global {
 
 export default function GoogleSignInButton({ onSuccess, onError, text = 'continue_with' }: GoogleSignInButtonProps) {
   const googleButtonRef = useRef<HTMLDivElement>(null);
+  const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
   useEffect(() => {
-    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || '108849204092-mockgoogleclientid.apps.googleusercontent.com';
+    if (!clientId) return; // Wait for valid client ID in env
 
     const handleCredentialResponse = (response: any) => {
       try {
         if (response.credential) {
-          // Decode JWT payload from Google ID Token
           const base64Url = response.credential.split('.')[1];
           const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
           const jsonPayload = decodeURIComponent(
@@ -37,7 +37,7 @@ export default function GoogleSignInButton({ onSuccess, onError, text = 'continu
             googleId: payload.sub,
           });
         }
-      } catch (err: any) {
+      } catch {
         onError('Google Sign-In parsing failed');
       }
     };
@@ -71,7 +71,11 @@ export default function GoogleSignInButton({ onSuccess, onError, text = 'continu
     } else {
       initializeGsi();
     }
-  }, [onSuccess, onError, text]);
+  }, [clientId, onSuccess, onError, text]);
+
+  if (!clientId) {
+    return null; // Don't render broken Google OAuth button if client ID isn't configured in Vercel env
+  }
 
   return (
     <div className="flex justify-center w-full my-2">
