@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
@@ -10,14 +10,51 @@ export default function PostJob() {
   const navigate = useNavigate();
 
   const [address, setAddress] = useState('');
-  const [lat, setLat] = useState(12.9352);
-  const [lng, setLng] = useState(77.6245);
-  const [gpsStatus, setGpsStatus] = useState('');
+  const [lat, setLat] = useState<number | null>(null);
+  const [lng, setLng] = useState<number | null>(null);
+  const [gpsStatus, setGpsStatus] = useState<'idle' | 'detecting' | 'locked' | 'denied'>('detecting');
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedSlot, setSelectedSlot] = useState('09:00 AM - 10:00 AM');
   const [description, setDescription] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
   const [error, setError] = useState('');
+
+  // Auto-detect GPS on page load
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      setGpsStatus('denied');
+      return;
+    }
+    setGpsStatus('detecting');
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLat(pos.coords.latitude);
+        setLng(pos.coords.longitude);
+        setGpsStatus('locked');
+      },
+      () => {
+        setGpsStatus('denied');
+      },
+      { timeout: 8000, enableHighAccuracy: true }
+    );
+  }, []);
+
+  const handleGps = () => {
+    if (!navigator.geolocation) {
+      setGpsStatus('denied');
+      return;
+    }
+    setGpsStatus('detecting');
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLat(pos.coords.latitude);
+        setLng(pos.coords.longitude);
+        setGpsStatus('locked');
+      },
+      () => setGpsStatus('denied'),
+      { timeout: 8000, enableHighAccuracy: true }
+    );
+  };
 
   const { data: categoriesData } = useQuery({
     queryKey: ['categories'],
@@ -28,40 +65,30 @@ export default function PostJob() {
     (c) => c.name === selectedCategory,
   )?.id;
 
-  const handleGps = () => {
-    if (navigator.geolocation) {
-      setGpsStatus('Detecting GPS location…');
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setLat(pos.coords.latitude);
-          setLng(pos.coords.longitude);
-          setGpsStatus(`📍 Location detected (${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)})`);
-        },
-        () => setGpsStatus('⚠️ GPS permission denied. Using Koramangala as default.')
-      );
-    } else {
-      setGpsStatus('⚠️ Geolocation not available.');
-    }
-  };
-
   const postMutation = useMutation({
-    mutationFn: () =>
-      api.post<{ booking: Booking }>('/api/bookings/request', {
+    mutationFn: () => {
+      // Use actual GPS if locked, fallback to Bangalore city center only if denied
+      const jobLat = lat ?? 12.9716;
+      const jobLng = lng ?? 77.5946;
+      return api.post<{ booking: Booking; nearbyWorkersCount: number }>('/api/bookings/request', {
         categoryId,
         address,
-        lat,
-        lng,
+        lat: jobLat,
+        lng: jobLng,
         scheduledAt: new Date(selectedDate).toISOString(),
         description,
-        // No providerId — open job for any provider to pick up
-      }),
+        // No providerId — open job broadcast to all nearby providers
+      });
+    },
     onSuccess: (data) => {
       navigate(`/booking/${data.booking.id}/confirmed`);
     },
     onError: (err: any) => setError(err.message || 'Failed to post job'),
   });
 
-  const canPost = Boolean(address) && Boolean(selectedCategory) && categoryId !== undefined;
+  const gpsLocked = gpsStatus === 'locked';
+  const canPost = Boolean(address) && Boolean(selectedCategory) && categoryId !== undefined && (gpsLocked || gpsStatus === 'denied');
+
 
   return (
     <div className="bg-[#f7fafb] py-8 pb-20 md:pb-10">
@@ -125,19 +152,27 @@ export default function PostJob() {
 
           {/* Address & GPS */}
           <div className="space-y-4 pt-2 border-t border-slate-100">
+            {/* GPS Status Banner */}
+            <div className={`flex items-center justify-between rounded-xl px-4 py-2.5 text-xs font-semibold ${
+              gpsStatus === 'locked' ? 'bg-teal-50 text-teal-700 border border-teal-200' :
+              gpsStatus === 'detecting' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
+              'bg-rose-50 text-rose-700 border border-rose-200'
+            }`}>
+              <span>
+                {gpsStatus === 'locked' && `📍 GPS Locked — ${lat?.toFixed(5)}, ${lng?.toFixed(5)}`}
+                {gpsStatus === 'detecting' && '⏳ Detecting your GPS location…'}
+                {gpsStatus === 'denied' && '⚠️ GPS denied — tap below to retry or enter address manually'}
+                {gpsStatus === 'idle' && '📍 GPS not started'}
+              </span>
+              <button type="button" onClick={handleGps} className="underline ml-2 shrink-0">
+                {gpsStatus === 'locked' ? 'Refresh' : 'Retry GPS'}
+              </button>
+            </div>
+
             <div>
-              <div className="flex justify-between items-center mb-1">
-                <label className="block text-xs font-bold uppercase tracking-wide text-slate-700">
-                  Service Address *
-                </label>
-                <button
-                  type="button"
-                  onClick={handleGps}
-                  className="text-xs font-semibold text-primary hover:underline flex items-center gap-1"
-                >
-                  📍 Use Mobile GPS
-                </button>
-              </div>
+              <label className="block text-xs font-bold uppercase tracking-wide text-slate-700 mb-1">
+                Service Address *
+              </label>
               <input
                 type="text"
                 value={address}
@@ -145,8 +180,9 @@ export default function PostJob() {
                 placeholder="e.g. 12, 5th Block, Koramangala, Bengaluru"
                 className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-200"
               />
-              {gpsStatus && <p className="mt-1 text-xs text-slate-500 font-medium">{gpsStatus}</p>}
+              <p className="mt-1 text-xs text-slate-400">Enter your full address for the specialist to find you.</p>
             </div>
+
 
             {/* Problem Description */}
             <div>

@@ -1,7 +1,6 @@
 import { Request, Response } from 'express';
-import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
-import { broadcastNewJob, broadcastJobClaimed, emitBookingUpdate } from '../lib/socketEmitter.js';
+import { emitJobToNearbyProviders, findNearbyOnlineProviders, broadcastJobClaimed, emitBookingUpdate } from '../lib/socketEmitter.js';
 
 // ── Booking state machine ────────────────────────────────────────────────
 const VALID_TRANSITIONS: Record<string, string[]> = {
@@ -29,10 +28,10 @@ function validateTransition(current: string, next: string): string | null {
 /**
  * POST /api/bookings/request
  * - If providerId is provided → direct booking to that specific specialist.
- * - If providerId is omitted / null → Zomato/Swiggy style BROADCAST dispatch:
- *   1. Performs real geospatial PostGIS query for online verified workers within radius (default 5km).
- *   2. Saves booking in PostgreSQL with providerId = null.
- *   3. Pushes instant real-time Socket.io 'job:broadcast' event to all online nearby workers.
+ * - If providerId is omitted / null → Swiggy/Zomato broadcast dispatch:
+ *   1. Saves booking with providerId = null.
+ *   2. Queries in-memory presence map (updated by live socket GPS pings) for nearby online providers.
+ *   3. Emits job:broadcast ONLY to those specific provider socket IDs.
  */
 export async function request(req: Request, res: Response) {
   const user = res.locals.user;
@@ -43,7 +42,7 @@ export async function request(req: Request, res: Response) {
   const numCategoryId = typeof categoryId === 'number' ? categoryId : parseInt(categoryId, 10);
   const numLat = typeof lat === 'number' ? lat : parseFloat(lat);
   const numLng = typeof lng === 'number' ? lng : parseFloat(lng);
-  const radiusKm = typeof customRadius === 'number' ? customRadius : parseFloat(customRadius) || 5;
+  const radiusKm = typeof customRadius === 'number' ? customRadius : parseFloat(customRadius) || 10;
 
   if (isNaN(numCategoryId) || !address || isNaN(numLat) || isNaN(numLng)) {
     return res.status(400).json({ error: 'categoryId, address, lat, lng are required' });
@@ -64,7 +63,7 @@ export async function request(req: Request, res: Response) {
       if (!isNaN(d.getTime())) parsedDate = d;
     }
 
-    // 1. Save booking to PostgreSQL with providerId = null for open jobs
+    // 1. Save booking to PostgreSQL with providerId = null for open broadcast jobs
     const booking = await prisma.booking.create({
       data: {
         customerId: user.userId,
@@ -87,42 +86,18 @@ export async function request(req: Request, res: Response) {
       data: { bookingId: booking.id, status: 'REQUESTED' },
     });
 
-    // 2. Real Geospatial Query (PostGIS ST_DWithin + ST_Distance)
-    let nearbyWorkersCount = 0;
-    try {
-      const nearbyWorkers: any[] = await prisma.$queryRaw(Prisma.sql`
-        SELECT
-          pl."providerId",
-          u.name,
-          u.phone,
-          pp.category,
-          pl.lat,
-          pl.lng,
-          ROUND((ST_Distance(ST_SetSRID(ST_MakePoint(pl.lng, pl.lat), 4326)::geography, ST_SetSRID(ST_MakePoint(${numLng}, ${numLat}), 4326)::geography) / 1000)::numeric, 2) AS "distanceKm"
-        FROM "ProviderLocation" pl
-        JOIN "User" u ON u.id = pl."providerId"
-        JOIN "ProviderProfile" pp ON pp."userId" = pl."providerId"
-        WHERE pl."isOnline" = true
-          AND pp."verifiedStatus" = 'VERIFIED'
-          AND ST_DWithin(
-            ST_SetSRID(ST_MakePoint(pl.lng, pl.lat), 4326)::geography,
-            ST_SetSRID(ST_MakePoint(${numLng}, ${numLat}), 4326)::geography,
-            ${radiusKm * 1000}
-          )
-        ORDER BY "distanceKm" ASC
-      `);
-      nearbyWorkersCount = nearbyWorkers.length;
-    } catch {
-      // fallback count
-    }
+    // 2. Find nearby online providers using in-memory GPS presence map (Haversine, no PostGIS needed)
+    const nearbyProviders = findNearbyOnlineProviders(numLat, numLng, radiusKm);
+    console.log(`[Dispatch] Job ${booking.id}: found ${nearbyProviders.length} provider(s) within ${radiusKm}km`);
 
-    // 3. Real-Time Push via Socket.io to all nearby workers
-    broadcastNewJob(booking, radiusKm, nearbyWorkersCount);
+    // 3. Emit job:broadcast ONLY to their specific socket IDs
+    emitJobToNearbyProviders(booking, nearbyProviders, radiusKm);
 
     return res.status(201).json({
       booking,
-      nearbyWorkersCount,
+      nearbyWorkersCount: nearbyProviders.length,
       radiusKm,
+      nearbyProviders: nearbyProviders.map((p) => ({ providerId: p.providerId, distanceKm: p.distanceKm })),
     });
   } catch (err: any) {
     console.error('Error creating booking:', err);
@@ -130,16 +105,18 @@ export async function request(req: Request, res: Response) {
   }
 }
 
+
+
 /**
  * POST /api/bookings/:bookingId/rebroadcast
- * Expands search radius (e.g. 5km -> 15km -> 25km) and re-broadcasts unassigned jobs.
+ * Expands search radius (e.g. 10km -> 20km -> 30km) and re-broadcasts unassigned jobs.
  */
 export async function rebroadcast(req: Request, res: Response) {
   const user = res.locals.user;
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
   const { bookingId } = req.params;
-  const radiusKm = parseFloat(req.body.radiusKm ?? '15') || 15;
+  const radiusKm = parseFloat(req.body.radiusKm ?? '20') || 20;
 
   try {
     const booking = await prisma.booking.findUnique({
@@ -152,29 +129,13 @@ export async function rebroadcast(req: Request, res: Response) {
       return res.status(400).json({ error: 'Booking is already accepted or not open' });
     }
 
-    // PostGIS query with expanded radius
-    let nearbyWorkersCount = 0;
-    try {
-      const nearbyWorkers: any[] = await prisma.$queryRaw(Prisma.sql`
-        SELECT pl."providerId"
-        FROM "ProviderLocation" pl
-        JOIN "ProviderProfile" pp ON pp."userId" = pl."providerId"
-        WHERE pl."isOnline" = true
-          AND pp."verifiedStatus" = 'VERIFIED'
-          AND ST_DWithin(
-            ST_SetSRID(ST_MakePoint(pl.lng, pl.lat), 4326)::geography,
-            ST_SetSRID(ST_MakePoint(${booking.lng}, ${booking.lat}), 4326)::geography,
-            ${radiusKm * 1000}
-          )
-      `);
-      nearbyWorkersCount = nearbyWorkers.length;
-    } catch {
-      // fallback
-    }
+    // Use in-memory Haversine with expanded radius
+    const nearbyProviders = findNearbyOnlineProviders(booking.lat!, booking.lng!, radiusKm);
+    console.log(`[Rebroadcast] Job ${bookingId}: ${nearbyProviders.length} providers within ${radiusKm}km`);
 
-    broadcastNewJob(booking, radiusKm, nearbyWorkersCount);
+    emitJobToNearbyProviders(booking, nearbyProviders, radiusKm);
 
-    return res.json({ success: true, bookingId, radiusKm, nearbyWorkersCount });
+    return res.json({ success: true, bookingId, radiusKm, nearbyWorkersCount: nearbyProviders.length });
   } catch (err: any) {
     return res.status(500).json({ error: err.message || 'Failed to re-broadcast' });
   }

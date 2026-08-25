@@ -43,13 +43,13 @@ export default function ProviderDashboard() {
 
   const watchTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // 1. Send Presence + GPS Coordinates to Backend
+  // 1. Send Presence + GPS Coordinates to Backend (HTTP + Socket for double reliability)
   const sendPresencePing = useCallback(
     async (isOnline: boolean) => {
       if (!user?.id) return;
       try {
-        let lat = user.lat || 12.9352;
-        let lng = user.lng || 77.6245;
+        let lat = 12.9716; // Bangalore fallback
+        let lng = 77.5946;
 
         if (navigator.geolocation && isOnline) {
           await new Promise<void>((resolve) => {
@@ -66,13 +66,17 @@ export default function ProviderDashboard() {
           });
         }
 
+        // HTTP ping to persist to DB
         await api.post('/api/providers/ping', { lat, lng, isOnline });
 
+        // Socket ping — this updates the in-memory presence map used for dispatch
         const socket = getSocket();
         if (socket.connected) {
+          socket.emit('set-provider-id', user.id);
           if (isOnline) {
-            socket.emit('set-provider-id', user.id);
+            // Emit both events: provider:online updates presence map, provider:location refreshes GPS
             socket.emit('provider:online', { providerId: user.id, lat, lng });
+            socket.emit('provider:location', { providerId: user.id, lat, lng, isOnline: true });
           } else {
             socket.emit('provider:offline', { providerId: user.id });
           }

@@ -21,7 +21,7 @@ import {
   cancel as cancelBooking,
 } from './server/bookingLifecycle.js';
 import { create as createReview } from './server/reviews.js';
-import { setSocketIO } from './lib/socketEmitter.js';
+import { setSocketIO, setProviderPresence, removeProviderBySocketId, setProviderOffline } from './lib/socketEmitter.js';
 
 const app = express();
 const server = createServer(app);
@@ -85,7 +85,7 @@ const io = new SocketIOServer(server, {
 });
 setSocketIO(io);
 
-// Track online providers: providerId -> socketId
+// Track online providers: providerId -> socketId (kept for backward compat; presence details now in socketEmitter)
 const providerSockets = new Map<string, string>();
 
 io.on('connection', (socket: Socket) => {
@@ -95,26 +95,35 @@ io.on('connection', (socket: Socket) => {
     socket.join(`booking-room:${bookingId}`);
   });
 
-  // Provider registers presence and joins their private room + global online room
+  // Provider registers with their current GPS location
   socket.on('set-provider-id', (providerId: string) => {
     if (!providerId) return;
     providerSockets.set(providerId, socket.id);
     socket.join(`provider-room:${providerId}`);
     socket.join('providers:online');
-    console.log(`Provider ${providerId} joined provider room & providers:online`);
+    console.log(`[Socket] Provider ${providerId} registered socket ${socket.id}`);
   });
 
+  // Provider goes online — must send lat/lng for dispatch to work
   socket.on('provider:online', (data: { providerId: string; lat?: number; lng?: number }) => {
     if (!data?.providerId) return;
+    const lat = typeof data.lat === 'number' ? data.lat : 0;
+    const lng = typeof data.lng === 'number' ? data.lng : 0;
+
     providerSockets.set(data.providerId, socket.id);
     socket.join(`provider-room:${data.providerId}`);
     socket.join('providers:online');
-    io.emit('provider:presence-update', { providerId: data.providerId, isOnline: true, lat: data.lat, lng: data.lng });
+
+    // Update in-memory presence map for real-time dispatch
+    setProviderPresence(data.providerId, socket.id, lat, lng, true);
+
+    io.emit('provider:presence-update', { providerId: data.providerId, isOnline: true, lat, lng });
   });
 
   socket.on('provider:offline', (data: { providerId: string }) => {
     if (!data?.providerId) return;
     socket.leave('providers:online');
+    setProviderOffline(data.providerId);
     io.emit('provider:presence-update', { providerId: data.providerId, isOnline: false });
   });
 
@@ -123,20 +132,27 @@ io.on('connection', (socket: Socket) => {
     for (const [pid, sid] of providerSockets.entries()) {
       if (sid === socket.id) {
         providerSockets.delete(pid);
-        socket.leave('providers:online');
-        io.emit('provider:presence-update', { providerId: pid, isOnline: false });
-        console.log(`Provider ${pid} disconnected`);
         break;
       }
     }
+    // Mark offline in presence map
+    removeProviderBySocketId(socket.id);
+    socket.leave('providers:online');
+    console.log(`[Socket] Client disconnected: ${socket.id}`);
   });
 
-  // Live GPS tracking during active order
+  // Live GPS update during active session — this is the primary source of provider location
   socket.on('provider:location', (data: { providerId: string; lat: number; lng: number; isOnline: boolean; bookingId?: string }) => {
     if (!data?.providerId) return;
+    const lat = typeof data.lat === 'number' ? data.lat : 0;
+    const lng = typeof data.lng === 'number' ? data.lng : 0;
+
     providerSockets.set(data.providerId, socket.id);
     socket.join(`provider-room:${data.providerId}`);
-    socket.join('providers:online');
+    if (data.isOnline) socket.join('providers:online');
+
+    // Update presence map with fresh GPS coordinates
+    setProviderPresence(data.providerId, socket.id, lat, lng, data.isOnline);
 
     if (data.bookingId) {
       io.to(`booking-room:${data.bookingId}`).emit('provider:location-update', {
