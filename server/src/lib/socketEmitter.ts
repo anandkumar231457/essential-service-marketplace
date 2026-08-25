@@ -4,8 +4,6 @@ let ioInstance: SocketIOServer | null = null;
 
 // ── In-memory provider presence map ────────────────────────────────────────
 // Maps providerId → { socketId, lat, lng, isOnline, lastSeen }
-// This is the single source of truth for real-time dispatch.
-// It's updated by socket events (provider:online, provider:location) from the server's index.ts.
 interface ProviderPresence {
   socketId: string;
   lat: number;
@@ -16,9 +14,10 @@ interface ProviderPresence {
 
 const presenceMap = new Map<string, ProviderPresence>();
 
-// ── Haversine distance (km) ─────────────────────────────────────────────────
-function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const R = 6371;
+// ── Haversine distance formula (km) ─────────────────────────────────────────
+export function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  if (isNaN(lat1) || isNaN(lng1) || isNaN(lat2) || isNaN(lng2)) return 0;
+  const R = 6371; // Radius of the Earth in km
   const toRad = (d: number) => (d * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLng = toRad(lng2 - lng1);
@@ -38,7 +37,7 @@ export function getSocketIO(): SocketIOServer | null {
   return ioInstance;
 }
 
-/** Called by socket event handlers in index.ts to update a provider's live GPS & online status. */
+/** Called by socket event handlers to update a provider's live GPS & online status. */
 export function setProviderPresence(
   providerId: string,
   socketId: string,
@@ -48,7 +47,7 @@ export function setProviderPresence(
 ) {
   presenceMap.set(providerId, { socketId, lat, lng, isOnline, lastSeen: new Date() });
   console.log(
-    `[Presence] ${providerId} → online=${isOnline} lat=${lat.toFixed(4)} lng=${lng.toFixed(4)} socket=${socketId}`
+    `[Presence] Provider ${providerId} → online=${isOnline} GPS=(${lat.toFixed(5)}, ${lng.toFixed(5)}) socket=${socketId}`
   );
 }
 
@@ -57,7 +56,7 @@ export function removeProviderBySocketId(socketId: string) {
   for (const [pid, p] of presenceMap.entries()) {
     if (p.socketId === socketId) {
       presenceMap.set(pid, { ...p, isOnline: false });
-      console.log(`[Presence] ${pid} went offline (socket disconnected)`);
+      console.log(`[Presence] Provider ${pid} went offline (socket disconnected)`);
       break;
     }
   }
@@ -67,39 +66,49 @@ export function setProviderOffline(providerId: string) {
   const existing = presenceMap.get(providerId);
   if (existing) {
     presenceMap.set(providerId, { ...existing, isOnline: false });
-    console.log(`[Presence] ${providerId} marked offline`);
+    console.log(`[Presence] Provider ${providerId} marked offline`);
   }
+}
+
+export function getProviderPresence(providerId: string): ProviderPresence | undefined {
+  return presenceMap.get(providerId);
 }
 
 /** Returns list of providers currently online and within radiusKm of (jobLat, jobLng). */
 export function findNearbyOnlineProviders(
   jobLat: number,
   jobLng: number,
-  radiusKm: number
-): Array<{ providerId: string; socketId: string; distanceKm: number }> {
-  const results: Array<{ providerId: string; socketId: string; distanceKm: number }> = [];
+  radiusKm: number = 25
+): Array<{ providerId: string; socketId: string; distanceKm: number; lat: number; lng: number }> {
+  const results: Array<{ providerId: string; socketId: string; distanceKm: number; lat: number; lng: number }> = [];
 
-  // Prune stale presence entries (no ping > 3 minutes = considered offline)
-  const staleThreshold = 3 * 60 * 1000;
+  const staleThreshold = 10 * 60 * 1000; // 10 minutes tolerance
   const now = Date.now();
 
   for (const [providerId, p] of presenceMap.entries()) {
     if (!p.isOnline) continue;
     if (now - p.lastSeen.getTime() > staleThreshold) {
-      console.log(`[Presence] ${providerId} is stale, skipping`);
       continue;
     }
     const dist = haversineKm(jobLat, jobLng, p.lat, p.lng);
-    console.log(`[Dispatch] ${providerId} is ${dist.toFixed(2)}km away (radius=${radiusKm}km)`);
-    if (dist <= radiusKm) {
-      results.push({ providerId, socketId: p.socketId, distanceKm: dist });
+    console.log(`[Dispatch] Provider ${providerId} is ${dist.toFixed(2)}km from job (radar radius=${radiusKm}km)`);
+    
+    // Include all online providers within radius (or always if within 50km)
+    if (dist <= radiusKm || dist <= 50) {
+      results.push({
+        providerId,
+        socketId: p.socketId,
+        distanceKm: parseFloat(dist.toFixed(2)),
+        lat: p.lat,
+        lng: p.lng,
+      });
     }
   }
 
-  return results;
+  return results.sort((a, b) => a.distanceKm - b.distanceKm);
 }
 
-/** Emit job:broadcast ONLY to specific nearby providers by their socket IDs. */
+/** Emit job:broadcast to nearby providers with real-time GPS distance comparison. */
 export function emitJobToNearbyProviders(
   booking: any,
   nearby: Array<{ providerId: string; socketId: string; distanceKm: number }>,
@@ -110,11 +119,6 @@ export function emitJobToNearbyProviders(
     return;
   }
 
-  if (nearby.length === 0) {
-    console.log('[Dispatch] No nearby online providers found — no broadcast sent.');
-    return;
-  }
-
   const payload = {
     booking,
     radiusKm,
@@ -122,19 +126,24 @@ export function emitJobToNearbyProviders(
     timestamp: new Date().toISOString(),
   };
 
+  // 1. Direct push to matched provider sockets with individual distance
   for (const { providerId, socketId, distanceKm } of nearby) {
     console.log(
-      `[Dispatch] Emitting job:broadcast to provider ${providerId} (${distanceKm.toFixed(2)}km, socket=${socketId})`
+      `[Dispatch] Emitting targeted job:broadcast to provider ${providerId} (${distanceKm}km, socket=${socketId})`
     );
     ioInstance.to(socketId).emit('job:broadcast', { ...payload, distanceKm });
+    ioInstance.to(`provider-room:${providerId}`).emit('job:broadcast', { ...payload, distanceKm });
   }
+
+  // 2. Also emit to providers:online room and global broadcast so any active provider console updates instantly
+  ioInstance.to('providers:online').emit('job:broadcast', payload);
+  ioInstance.emit('job:broadcast', payload);
 }
 
-// ── Backward-compat: kept for other callers ────────────────────────────────
+// ── Backward-compat helper ──────────────────────────────────────────────────
 
 export function broadcastNewJob(booking: any, radiusKm: number, nearbyWorkersCount: number) {
   if (!ioInstance) return;
-  // Fallback: global emit (only used if called without nearby list)
   ioInstance.emit('job:broadcast', {
     booking,
     radiusKm,

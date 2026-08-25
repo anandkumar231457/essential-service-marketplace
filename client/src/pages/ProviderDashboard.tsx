@@ -6,6 +6,19 @@ import { getSocket } from '../lib/socket';
 import { useAuthStore } from '../store/authStore';
 import BookingCard, { type HistoryBooking } from '../components/BookingCard';
 
+// Haversine distance helper for client-side comparison
+function calculateDistanceKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  if (!lat1 || !lng1 || !lat2 || !lng2) return 0;
+  const R = 6371; // Earth radius in km
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return parseFloat((R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))).toFixed(2));
+}
+
 // Web Audio API chime helper for incoming order notification
 function playOrderChime() {
   try {
@@ -38,105 +51,171 @@ export default function ProviderDashboard() {
   const [available, setAvailable] = useState(true);
   const [actionError, setActionError] = useState('');
   const [actionSuccess, setActionSuccess] = useState('');
-  const [liveLocation, setLiveLocation] = useState<{ lat: number; lng: number } | null>(null);
-  const [realtimeAlert, setRealtimeAlert] = useState<{ message: string; category?: string } | null>(null);
+  
+  // Live GPS tracking state
+  const [liveLocation, setLiveLocation] = useState<{ lat: number; lng: number; accuracy?: number } | null>(null);
+  const [gpsStatus, setGpsStatus] = useState<'tracking' | 'searching' | 'denied'>('searching');
+  const [lastGpsSync, setLastGpsSync] = useState<Date>(new Date());
+  
+  // Real-time dispatch alert state
+  const [realtimeAlert, setRealtimeAlert] = useState<{
+    bookingId: string;
+    message: string;
+    category?: string;
+    distanceKm?: number;
+    address?: string;
+  } | null>(null);
 
-  const watchTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const watchIdRef = useRef<number | null>(null);
+  const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // 1. Send Presence + GPS Coordinates to Backend (HTTP + Socket for double reliability)
-  const sendPresencePing = useCallback(
-    async (isOnline: boolean) => {
+  // 1. Send Presence + GPS Coordinates to Backend
+  const syncLocation = useCallback(
+    async (coords: { lat: number; lng: number; accuracy?: number }, isOnline: boolean) => {
       if (!user?.id) return;
       try {
-        let lat = 12.9716; // Bangalore fallback
-        let lng = 77.5946;
+        setLiveLocation(coords);
+        setLastGpsSync(new Date());
 
-        if (navigator.geolocation && isOnline) {
-          await new Promise<void>((resolve) => {
-            navigator.geolocation.getCurrentPosition(
-              (pos) => {
-                lat = pos.coords.latitude;
-                lng = pos.coords.longitude;
-                setLiveLocation({ lat, lng });
-                resolve();
-              },
-              () => resolve(),
-              { timeout: 5000, enableHighAccuracy: true }
-            );
-          });
-        }
+        // HTTP ping to persist to database
+        await api.post('/api/providers/ping', {
+          lat: coords.lat,
+          lng: coords.lng,
+          isOnline,
+        });
 
-        // HTTP ping to persist to DB
-        await api.post('/api/providers/ping', { lat, lng, isOnline });
-
-        // Socket ping — this updates the in-memory presence map used for dispatch
+        // Socket emit to keep in-memory presence map active
         const socket = getSocket();
         if (socket.connected) {
           socket.emit('set-provider-id', user.id);
           if (isOnline) {
-            // Emit both events: provider:online updates presence map, provider:location refreshes GPS
-            socket.emit('provider:online', { providerId: user.id, lat, lng });
-            socket.emit('provider:location', { providerId: user.id, lat, lng, isOnline: true });
+            socket.emit('provider:online', { providerId: user.id, lat: coords.lat, lng: coords.lng });
+            socket.emit('provider:location', { providerId: user.id, lat: coords.lat, lng: coords.lng, isOnline: true });
           } else {
             socket.emit('provider:offline', { providerId: user.id });
           }
         }
       } catch {
-        // ignore network glitches
+        // ignore background glitches
       }
     },
     [user]
   );
 
-  // 2. Presence Lifecycle: Refresh location every 20s while online
-  useEffect(() => {
-    if (available) {
-      sendPresencePing(true);
-      watchTimerRef.current = setInterval(() => {
-        sendPresencePing(true);
-      }, 20000);
-    } else {
-      sendPresencePing(false);
-      if (watchTimerRef.current) clearInterval(watchTimerRef.current);
+  // 2. Active GPS Watcher: Uses navigator.geolocation.watchPosition for continuous high accuracy
+  const startGpsTracking = useCallback(() => {
+    if (!navigator.geolocation) {
+      setGpsStatus('denied');
+      return;
     }
 
-    return () => {
-      if (watchTimerRef.current) clearInterval(watchTimerRef.current);
-    };
-  }, [available, sendPresencePing]);
+    setGpsStatus('searching');
 
-  // 3. Socket.io Real-Time Push Listener for Zomato/Swiggy Instant Dispatch
+    // First do an immediate getCurrentPosition
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const coords = {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: Math.round(pos.coords.accuracy),
+        };
+        setGpsStatus('tracking');
+        syncLocation(coords, available);
+      },
+      () => {
+        setGpsStatus('denied');
+        // Fallback default coordinates if denied
+        const fallback = { lat: 12.9352, lng: 77.6245, accuracy: 50 };
+        syncLocation(fallback, available);
+      },
+      { timeout: 8000, enableHighAccuracy: true, maximumAge: 0 }
+    );
+
+    // Then start continuous watchPosition
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+    }
+
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        const coords = {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: Math.round(pos.coords.accuracy),
+        };
+        setGpsStatus('tracking');
+        syncLocation(coords, available);
+      },
+      (err) => {
+        console.warn('GPS watch warning:', err.message);
+      },
+      { timeout: 15000, enableHighAccuracy: true, maximumAge: 5000 }
+    );
+  }, [available, syncLocation]);
+
+  // 3. Presence Lifecycle: Refresh GPS on mount and start periodic background sync
+  useEffect(() => {
+    startGpsTracking();
+
+    // Background interval to refresh DB ping every 20 seconds
+    pingIntervalRef.current = setInterval(() => {
+      if (liveLocation) {
+        syncLocation(liveLocation, available);
+      }
+    }, 20000);
+
+    return () => {
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+      }
+      if (pingIntervalRef.current) {
+        clearInterval(pingIntervalRef.current);
+      }
+    };
+  }, [available, startGpsTracking, syncLocation, liveLocation]);
+
+  // 4. Socket.io Real-Time Push Listener for Zomato/Swiggy Instant Dispatch
   useEffect(() => {
     const socket = getSocket();
 
     const handleConnect = () => {
       if (user?.id) {
         socket.emit('set-provider-id', user.id);
-        if (available) {
-          socket.emit('provider:online', { providerId: user.id, lat: liveLocation?.lat, lng: liveLocation?.lng });
+        if (available && liveLocation) {
+          socket.emit('provider:online', { providerId: user.id, lat: liveLocation.lat, lng: liveLocation.lng });
         }
       }
     };
 
-    const handleJobBroadcast = (data: { booking: HistoryBooking; radiusKm?: number; nearbyWorkersCount?: number }) => {
-      // Play audio chime immediately
+    const handleJobBroadcast = (data: { booking: HistoryBooking; radiusKm?: number; distanceKm?: number }) => {
+      // Play audio chime
       playOrderChime();
 
-      // Invalidate queries so React Query updates the open jobs instantly
+      // Compare GPS distance
+      let dist = data.distanceKm;
+      if (!dist && liveLocation && data.booking?.lat && data.booking?.lng) {
+        dist = calculateDistanceKm(liveLocation.lat, liveLocation.lng, data.booking.lat, data.booking.lng);
+      }
+
+      // Invalidate queries so open jobs list updates instantly
       queryClient.invalidateQueries({ queryKey: ['open-jobs'] });
       queryClient.invalidateQueries({ queryKey: ['my-bookings'] });
 
-      // Show alert banner
+      // Show alert banner with exact distance
       setRealtimeAlert({
-        message: `🔔 New Order Dispatch: ${data.booking.category?.name || 'Service'} requested nearby (${data.booking.address})!`,
+        bookingId: data.booking.id,
+        message: `🔔 New Order Dispatch: ${data.booking.category?.name || 'Service'} requested!`,
         category: data.booking.category?.name,
+        distanceKm: dist,
+        address: data.booking.address,
       });
 
-      setTimeout(() => setRealtimeAlert(null), 8000);
+      // Auto dismiss after 12 seconds
+      setTimeout(() => setRealtimeAlert(null), 12000);
     };
 
     const handleJobClaimed = (data: { bookingId: string; assignedTo: string; providerName?: string }) => {
-      // If someone else claimed it, remove it immediately from our board
+      // If someone else claimed it, remove it immediately from our open jobs
       if (data.assignedTo !== user?.id) {
         queryClient.setQueryData<{ bookings: HistoryBooking[] }>(['open-jobs'], (old) => {
           if (!old) return old;
@@ -169,7 +248,7 @@ export default function ProviderDashboard() {
     };
   }, [user, available, queryClient, liveLocation]);
 
-  // 4. Data queries (with fast background refresh)
+  // 5. Data queries (with fast background refresh & sending live GPS)
   const { data } = useQuery({
     queryKey: ['my-bookings'],
     queryFn: () => api.get<{ bookings: HistoryBooking[] }>('/api/bookings/my'),
@@ -177,8 +256,11 @@ export default function ProviderDashboard() {
   });
 
   const { data: openJobsData } = useQuery({
-    queryKey: ['open-jobs'],
-    queryFn: () => api.get<{ bookings: HistoryBooking[] }>('/api/bookings/open'),
+    queryKey: ['open-jobs', liveLocation?.lat, liveLocation?.lng],
+    queryFn: () => {
+      const params = liveLocation ? `?lat=${liveLocation.lat}&lng=${liveLocation.lng}` : '';
+      return api.get<{ bookings: (HistoryBooking & { distanceKm?: number })[] }>(`/api/bookings/open${params}`);
+    },
     refetchInterval: 3000,
   });
 
@@ -186,9 +268,17 @@ export default function ProviderDashboard() {
   const requestedOrders = allBookings.filter((b) => b.status === 'REQUESTED');
   const activeJobs = allBookings.filter((b) => ['ACCEPTED', 'EN_ROUTE', 'IN_PROGRESS'].includes(b.status));
   const completedJobs = allBookings.filter((b) => b.status === 'COMPLETED');
-  const openJobs = openJobsData?.bookings ?? [];
 
-  // 5. Mutation for advancing order lifecycle with atomic first-accept handling
+  // Compute live distances for open jobs relative to provider's current GPS
+  const openJobs = (openJobsData?.bookings ?? []).map((job) => {
+    let dist = job.distanceKm;
+    if (dist === undefined && liveLocation && job.lat && job.lng) {
+      dist = calculateDistanceKm(liveLocation.lat, liveLocation.lng, job.lat, job.lng);
+    }
+    return { ...job, computedDistanceKm: dist };
+  }).sort((a, b) => (a.computedDistanceKm ?? 999) - (b.computedDistanceKm ?? 999));
+
+  // 6. Mutation for advancing order lifecycle with atomic first-accept handling
   const advanceMutation = useMutation({
     mutationFn: async ({ endpoint, bookingId }: { endpoint: string; bookingId: string }) => {
       return api.post(`/api/bookings/${endpoint}`, { bookingId });
@@ -199,19 +289,18 @@ export default function ProviderDashboard() {
       setActionError('');
       const actionName =
         variables.endpoint === 'accept'
-          ? '🎉 Order Accepted! You are now assigned to this customer.'
+          ? '🎉 Order Accepted & Claimed! You are assigned to this job.'
           : variables.endpoint === 'en-route'
-          ? '🚗 Status updated to En Route! Customer can see you traveling.'
+          ? '🚗 Status: En Route. Customer notified.'
           : variables.endpoint === 'in-progress'
-          ? '🛠️ Service started! Timer & work in progress.'
+          ? '🛠️ Service Started! Work in progress.'
           : variables.endpoint === 'complete'
-          ? '✅ Job Completed successfully! Payout recorded.'
+          ? '✅ Job Completed Successfully! Payout recorded.'
           : 'Order updated.';
       setActionSuccess(actionName);
       setTimeout(() => setActionSuccess(''), 4000);
     },
     onError: (err: any) => {
-      // If order was already accepted by another specialist (409 Conflict)
       if (err?.status === 409 || err?.message?.includes('already accepted')) {
         setActionError('⚠️ Another specialist was faster! This order has already been claimed.');
         queryClient.invalidateQueries({ queryKey: ['open-jobs'] });
@@ -225,17 +314,19 @@ export default function ProviderDashboard() {
   const toggleAvailability = async () => {
     const next = !available;
     setAvailable(next);
-    await sendPresencePing(next);
+    if (liveLocation) {
+      await syncLocation(liveLocation, next);
+    }
   };
 
   return (
-    <div className="bg-[#f7fafb] px-5 py-10 lg:px-8 pb-20 md:pb-10 min-h-screen">
-      <div className="mx-auto max-w-6xl space-y-8">
+    <div className="bg-[#f7fafb] px-4 py-8 sm:px-6 lg:px-8 pb-20 md:pb-10 min-h-screen">
+      <div className="mx-auto max-w-6xl space-y-6">
         {/* Top Header & Availability Toggle */}
         <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-primary uppercase tracking-wide">PRO DISPATCH CONSOLE</span>
+              <span className="text-xs font-bold text-teal-700 uppercase tracking-wide">SPECIALIST DISPATCH RADAR</span>
               <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
                 available ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'
               }`}>
@@ -243,123 +334,159 @@ export default function ProviderDashboard() {
                 {available ? 'Radar Active (Online)' : 'Radar Inactive (Offline)'}
               </span>
             </div>
-            <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-900">
+            <h1 className="mt-1 text-2xl sm:text-3xl font-extrabold text-slate-900">
               Welcome back, {user?.name?.split(' ')[0] || 'Pro'}
             </h1>
             <p className="mt-1 text-xs text-slate-500">
-              Pick up incoming customer orders, manage active dispatches, and track earnings.
+              Active GPS matches incoming customer orders within your area in real-time.
             </p>
           </div>
 
           <button
             onClick={toggleAvailability}
-            className={`rounded-xl px-5 py-3 text-xs font-bold text-white transition shadow-md flex items-center gap-2 ${
+            className={`rounded-2xl px-5 py-3 text-xs font-bold text-white transition shadow-md flex items-center gap-2 ${
               available ? 'bg-emerald-600 hover:bg-emerald-700 ring-2 ring-emerald-300' : 'bg-slate-700 hover:bg-slate-800'
             }`}
           >
             <span className="text-sm">{available ? '🟢' : '⚪'}</span>
-            {available ? 'Online — Ready to Accept Orders' : 'Go Online to Receive Jobs'}
+            {available ? 'Online — Receiving Nearby Orders' : 'Go Online to Receive Orders'}
+          </button>
+        </div>
+
+        {/* 🛰️ ACTIVE LIVE GPS RADAR BAR */}
+        <div className="rounded-2xl border border-teal-200 bg-gradient-to-r from-teal-50 via-emerald-50 to-white p-4 sm:p-5 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-teal-600 text-white font-bold text-lg shadow-sm">
+              🛰️
+            </span>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-900 uppercase tracking-wide">
+                  Active Device GPS Tracking
+                </span>
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                  gpsStatus === 'tracking' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                }`}>
+                  {gpsStatus === 'tracking' ? '🟢 Live GPS Active' : '⏳ Acquiring Coords'}
+                </span>
+              </div>
+
+              {liveLocation ? (
+                <p className="text-xs text-slate-600 mt-0.5 font-mono">
+                  Coordinates: <span className="font-semibold text-slate-900">{liveLocation.lat.toFixed(5)}, {liveLocation.lng.toFixed(5)}</span>
+                  {liveLocation.accuracy && <span className="text-slate-400"> (±{liveLocation.accuracy}m)</span>}
+                  <span className="text-slate-400 ml-2">Synced: {lastGpsSync.toLocaleTimeString()}</span>
+                </p>
+              ) : (
+                <p className="text-xs text-slate-500 mt-0.5">Detecting continuous GPS location from your browser…</p>
+              )}
+            </div>
+          </div>
+
+          <button
+            onClick={startGpsTracking}
+            className="shrink-0 rounded-xl bg-white border border-teal-200 hover:border-teal-400 px-3.5 py-2 text-xs font-bold text-teal-800 shadow-sm transition hover:bg-teal-50 flex items-center gap-1.5 justify-center"
+          >
+            🔄 Refresh GPS Location
           </button>
         </div>
 
         {/* Real-time Order Arrival Banner */}
         {realtimeAlert && (
-          <div className="rounded-2xl border-2 border-violet-400 bg-gradient-to-r from-violet-600 to-indigo-700 p-5 text-white shadow-xl animate-bounce flex items-center justify-between">
+          <div className="rounded-3xl border-2 border-violet-500 bg-gradient-to-r from-violet-600 to-indigo-700 p-5 text-white shadow-2xl animate-bounce flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <span className="text-2xl">🔔</span>
+              <span className="text-3xl">🔔</span>
               <div>
-                <p className="font-bold text-sm">{realtimeAlert.message}</p>
-                <p className="text-xs text-violet-200">Tap Accept below to claim this job before other specialists!</p>
+                <div className="flex items-center gap-2">
+                  <span className="rounded-md bg-white/20 px-2 py-0.5 text-[10px] font-bold uppercase">
+                    New Order Alert
+                  </span>
+                  {realtimeAlert.distanceKm !== undefined && (
+                    <span className="rounded-md bg-amber-400 px-2 py-0.5 text-[10px] font-extrabold text-slate-950">
+                      📍 {realtimeAlert.distanceKm} km away from your GPS
+                    </span>
+                  )}
+                </div>
+                <p className="font-bold text-sm sm:text-base mt-1">{realtimeAlert.message}</p>
+                <p className="text-xs text-violet-200 font-medium">
+                  {realtimeAlert.address || 'Customer waiting nearby'}
+                </p>
               </div>
             </div>
-            <button
-              onClick={() => setRealtimeAlert(null)}
-              className="rounded-lg bg-white/20 px-3 py-1 text-xs font-semibold hover:bg-white/30"
-            >
-              Dismiss
-            </button>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  advanceMutation.mutate({ endpoint: 'accept', bookingId: realtimeAlert.bookingId });
+                  setRealtimeAlert(null);
+                }}
+                className="rounded-xl bg-emerald-400 hover:bg-emerald-300 px-4 py-2.5 text-xs font-extrabold text-slate-950 shadow-md transition"
+              >
+                ⚡ Accept Now
+              </button>
+              <button
+                onClick={() => setRealtimeAlert(null)}
+                className="rounded-xl bg-white/20 hover:bg-white/30 px-3 py-2.5 text-xs font-semibold"
+              >
+                Dismiss
+              </button>
+            </div>
           </div>
         )}
 
         {/* Action Notifications / Alerts */}
         {actionSuccess && (
-          <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 text-xs font-bold text-emerald-800 animate-pulse flex items-center gap-2">
+          <div className="rounded-2xl bg-emerald-50 border border-emerald-200 p-4 text-xs font-bold text-emerald-800 animate-pulse flex items-center gap-2">
             <span>✓</span> {actionSuccess}
           </div>
         )}
 
         {actionError && (
-          <div className="rounded-xl bg-rose-50 border border-rose-200 p-4 text-xs font-bold text-rose-800 flex items-center gap-2">
+          <div className="rounded-2xl bg-rose-50 border border-rose-200 p-4 text-xs font-bold text-rose-800 flex items-center gap-2">
             <span>⚠️</span> {actionError}
           </div>
         )}
 
-        {/* Console Quick Nav Buttons */}
-        <div className="flex flex-wrap gap-3">
-          <Link
-            to="/provider/services"
-            className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 shadow-sm hover:border-teal-200 hover:text-primary transition"
-          >
-            🛠️ Trade Category, Skills & Rates
-          </Link>
-          <Link
-            to="/provider/earnings"
-            className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 shadow-sm hover:border-teal-200 hover:text-primary transition"
-          >
-            💰 Earnings Breakdown
-          </Link>
-          <Link
-            to="/provider/availability"
-            className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 shadow-sm hover:border-teal-200 hover:text-primary transition"
-          >
-            ⏰ Shift & Availability
-          </Link>
-          <Link
-            to="/provider/coverage"
-            className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 shadow-sm hover:border-teal-200 hover:text-primary transition"
-          >
-            🗺️ Service Radius Area
-          </Link>
-        </div>
-
         {/* Stats Cards */}
-        <div className="grid gap-4 md:grid-cols-3">
-          <div className="rounded-2xl bg-amber-500 p-6 text-white shadow-sm">
-            <p className="text-xs font-medium text-amber-100 uppercase tracking-wide">Pending Customer Requests</p>
-            <p className="mt-2 text-4xl font-bold">{requestedOrders.length + openJobs.length}</p>
-            <p className="mt-2 text-xs text-amber-100">Ready to accept & pick up</p>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div className="rounded-2xl bg-amber-500 p-5 text-white shadow-sm">
+            <p className="text-xs font-bold text-amber-100 uppercase tracking-wide">Available Nearby Jobs</p>
+            <p className="mt-2 text-3xl font-extrabold">{openJobs.length + requestedOrders.length}</p>
+            <p className="mt-1 text-xs text-amber-100">Ready to accept right now</p>
           </div>
 
-          <div className="rounded-2xl bg-slate-950 p-6 text-white shadow-sm">
-            <p className="text-xs font-medium text-slate-400 uppercase tracking-wide">Active In-Progress Jobs</p>
-            <p className="mt-2 text-4xl font-bold">{activeJobs.length}</p>
-            <p className="mt-2 text-xs text-teal-300">En route or work underway</p>
+          <div className="rounded-2xl bg-slate-950 p-5 text-white shadow-sm">
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Active In-Progress Jobs</p>
+            <p className="mt-2 text-3xl font-extrabold">{activeJobs.length}</p>
+            <p className="mt-1 text-xs text-teal-300">En route or work underway</p>
           </div>
 
-          <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-            <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Completed Orders</p>
-            <p className="mt-2 text-4xl font-bold text-slate-900">{completedJobs.length}</p>
-            <p className="mt-2 text-xs text-slate-400">Total lifetime jobs finished</p>
+          <div className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Completed Orders</p>
+            <p className="mt-2 text-3xl font-extrabold text-slate-900">{completedJobs.length}</p>
+            <p className="mt-1 text-xs text-slate-400">Total lifetime jobs finished</p>
           </div>
         </div>
 
         {/* 0. OPEN BROADCAST JOB BOARD — Zomato/Swiggy Style Instant Dispatch */}
-        {openJobs.length > 0 && (
-          <section className="rounded-3xl border-2 border-violet-400 bg-violet-50/70 p-6 shadow-lg space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="grid h-10 w-10 place-items-center rounded-full bg-violet-600 text-white font-bold text-lg animate-bounce">
+        {openJobs.length > 0 ? (
+          <section className="rounded-3xl border-2 border-violet-400 bg-violet-50/70 p-5 sm:p-6 shadow-lg space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-violet-600 text-white font-bold text-lg animate-bounce">
                   🛵
                 </span>
                 <div>
-                  <h2 className="text-lg font-bold text-slate-900">Live Dispatch Radar — Open Orders Near You</h2>
+                  <h2 className="text-base sm:text-lg font-bold text-slate-900">
+                    Live Dispatch Radar — Open Orders Near Your GPS
+                  </h2>
                   <p className="text-xs text-slate-600">
-                    Customers posted work orders — tap Accept to instantly claim the job!
+                    Calculated distance from your live device coordinates. Tap Accept to claim the job!
                   </p>
                 </div>
               </div>
-              <span className="rounded-full bg-violet-200 px-3.5 py-1 text-xs font-bold text-violet-900 animate-pulse">
-                {openJobs.length} Live Order{openJobs.length > 1 ? 's' : ''} Available
+              <span className="rounded-full bg-violet-200 px-3.5 py-1 text-xs font-bold text-violet-900 animate-pulse self-start sm:self-center">
+                {openJobs.length} Live Order{openJobs.length > 1 ? 's' : ''} Ready
               </span>
             </div>
 
@@ -369,27 +496,46 @@ export default function ProviderDashboard() {
                   key={job.id}
                   className="rounded-2xl border-2 border-violet-200 bg-white p-5 shadow-md space-y-4 transition hover:border-violet-400"
                 >
-                  <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
-                    <div>
-                      <div className="flex items-center gap-2">
+                  <div className="flex flex-col sm:flex-row justify-between sm:items-start gap-3">
+                    <div className="space-y-1.5">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="rounded-md bg-violet-100 px-2.5 py-0.5 text-xs font-bold text-violet-800">
                           {job.category?.name || 'Home Service'}
                         </span>
+                        {job.computedDistanceKm !== undefined && (
+                          <span className={`rounded-md px-2.5 py-0.5 text-xs font-bold flex items-center gap-1 ${
+                            job.computedDistanceKm <= 3
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                              : 'bg-teal-100 text-teal-800 border border-teal-200'
+                          }`}>
+                            📍 {job.computedDistanceKm} km away from your GPS
+                          </span>
+                        )}
                         <span className="text-[11px] font-mono text-slate-400">#{job.id.slice(-6)}</span>
                       </div>
-                      <h3 className="text-base font-bold text-slate-900 mt-1">
+
+                      <h3 className="text-base font-bold text-slate-900">
                         Service Order from {job.customer?.name || 'Customer'}
                       </h3>
-                      <p className="text-xs text-slate-600 mt-0.5 flex items-center gap-1">
-                        <span>📍</span> <span className="font-medium">{job.address}</span>
+                      
+                      <p className="text-xs text-slate-700 font-medium flex items-center gap-1">
+                        <span>📍 Location:</span> <span>{job.address}</span>
                       </p>
+
+                      {job.description && (
+                        <p className="text-xs text-slate-500 italic bg-slate-50 p-2 rounded-lg border border-slate-100">
+                          "{job.description}"
+                        </p>
+                      )}
+
                       {job.scheduledAt && (
-                        <p className="text-xs text-slate-600 mt-0.5 font-medium">
-                          📅 Scheduled: {new Date(job.scheduledAt).toLocaleString()}
+                        <p className="text-[11px] text-slate-600 font-semibold">
+                          📅 Scheduled For: {new Date(job.scheduledAt).toLocaleString()}
                         </p>
                       )}
                     </div>
-                    <div className="text-right">
+
+                    <div className="text-right shrink-0">
                       <p className="text-xl font-extrabold text-emerald-600">₹500 / hr</p>
                       <p className="text-[11px] text-slate-400">Estimated Payout</p>
                     </div>
@@ -399,77 +545,56 @@ export default function ProviderDashboard() {
                     <button
                       onClick={() => advanceMutation.mutate({ endpoint: 'accept', bookingId: job.id })}
                       disabled={advanceMutation.isPending}
-                      className="flex-1 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 py-3.5 text-xs font-bold text-white shadow-md transition hover:from-violet-700 hover:to-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                      className="w-full rounded-xl bg-teal-600 py-3 text-xs font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:opacity-50 flex items-center justify-center gap-2"
                     >
-                      <span>🛵 Accept & Claim This Job (First-Come)</span>
+                      <span>🛵</span> Accept & Claim This Job (First-Accept-Wins)
                     </button>
                   </div>
                 </div>
               ))}
             </div>
           </section>
+        ) : (
+          <section className="rounded-3xl border border-slate-200 bg-white p-6 text-center space-y-2">
+            <div className="text-3xl">📡</div>
+            <h3 className="font-bold text-slate-800 text-sm">GPS Dispatch Radar is Active</h3>
+            <p className="text-xs text-slate-500 max-w-md mx-auto">
+              Scanning for new customer requests nearby. When a customer posts a job matching your GPS location, it will ring and appear here instantly!
+            </p>
+          </section>
         )}
 
-        {/* 1. DIRECT INCOMING ORDERS SECTION (Assigned directly to this provider) */}
+        {/* 1. Direct Requested Orders Assigned to You */}
         {requestedOrders.length > 0 && (
-          <section className="rounded-3xl border-2 border-amber-300 bg-amber-50/50 p-6 shadow-md space-y-4">
+          <section className="rounded-3xl border border-amber-200 bg-white p-6 shadow-sm space-y-4">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="grid h-8 w-8 place-items-center rounded-full bg-amber-500 text-white font-bold animate-bounce">
-                  ⚡
-                </span>
-                <div>
-                  <h2 className="text-lg font-bold text-slate-900">Direct Customer Bookings</h2>
-                  <p className="text-xs text-slate-600">Customers selected you specifically for service</p>
-                </div>
+              <div>
+                <h2 className="text-base font-bold text-slate-900">Direct Customer Bookings</h2>
+                <p className="text-xs text-slate-500">Customers selected you directly for these jobs.</p>
               </div>
-              <span className="rounded-full bg-amber-200 px-3 py-1 text-xs font-bold text-amber-900">
-                {requestedOrders.length} New Booking{requestedOrders.length > 1 ? 's' : ''}
+              <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-800">
+                {requestedOrders.length} Direct Request{requestedOrders.length > 1 ? 's' : ''}
               </span>
             </div>
 
-            <div className="space-y-4 pt-2">
-              {requestedOrders.map((order) => (
-                <div
-                  key={order.id}
-                  className="rounded-2xl border border-amber-200 bg-white p-5 shadow-sm space-y-4"
-                >
-                  <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+            <div className="grid gap-4">
+              {requestedOrders.map((booking) => (
+                <div key={booking.id} className="rounded-2xl border border-slate-100 p-4 space-y-3">
+                  <div className="flex justify-between items-start">
                     <div>
-                      <span className="rounded-md bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-800">
-                        {order.category?.name || 'Home Repair'}
+                      <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-700">
+                        {booking.category?.name}
                       </span>
-                      <h3 className="text-base font-bold text-slate-900 mt-1">
-                        Service Order from {order.customer?.name || 'Customer'}
-                      </h3>
-                      <p className="text-xs text-slate-500 mt-0.5">📍 {order.address}</p>
-                      {order.scheduledAt && (
-                        <p className="text-xs text-slate-600 mt-0.5 font-medium">
-                          📅 Scheduled: {new Date(order.scheduledAt).toLocaleString()}
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="text-right">
-                      <p className="text-lg font-bold text-primary">₹500 / hr</p>
-                      <p className="text-[11px] text-slate-400">Standard Payout</p>
+                      <h3 className="font-bold text-sm text-slate-900 mt-1">{booking.customer?.name}</h3>
+                      <p className="text-xs text-slate-500">📍 {booking.address}</p>
                     </div>
                   </div>
-
-                  <div className="flex gap-3 border-t border-slate-100 pt-4">
+                  <div className="flex gap-2 pt-2 border-t border-slate-100">
                     <button
-                      onClick={() => advanceMutation.mutate({ endpoint: 'accept', bookingId: order.id })}
-                      disabled={advanceMutation.isPending}
-                      className="flex-1 rounded-xl bg-emerald-600 py-3 text-xs font-bold text-white shadow-sm transition hover:bg-emerald-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                      onClick={() => advanceMutation.mutate({ endpoint: 'accept', bookingId: booking.id })}
+                      className="rounded-xl bg-teal-600 px-4 py-2 text-xs font-bold text-white hover:bg-teal-700"
                     >
-                      <span>⚡ Accept Order & Pick Up</span>
-                    </button>
-                    <button
-                      onClick={() => advanceMutation.mutate({ endpoint: 'cancel', bookingId: order.id })}
-                      disabled={advanceMutation.isPending}
-                      className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50"
-                    >
-                      Decline
+                      Accept Booking
                     </button>
                   </div>
                 </div>
@@ -478,74 +603,55 @@ export default function ProviderDashboard() {
           </section>
         )}
 
-        {/* 2. ACTIVE IN-PROGRESS DISPATCHES (ACCEPTED, EN_ROUTE, IN_PROGRESS) */}
+        {/* 2. Active Orders in Progress */}
         {activeJobs.length > 0 && (
-          <section className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-bold text-slate-900">Active Live Dispatches ({activeJobs.length})</h2>
-                <p className="text-xs text-slate-500">Live order progress controls — advance stages as you complete steps</p>
-              </div>
-            </div>
-
+          <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+            <h2 className="text-base font-bold text-slate-900">Active Dispatches in Progress</h2>
             <div className="space-y-4">
               {activeJobs.map((job) => (
-                <div key={job.id} className="rounded-2xl border-2 border-teal-200 bg-teal-50/20 p-5 space-y-4">
-                  <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
+                <div key={job.id} className="rounded-2xl border border-slate-100 p-5 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="rounded-md bg-teal-100 px-2 py-0.5 text-[11px] font-bold text-teal-800">
-                          {job.category?.name || 'Service'}
+                        <span className="rounded-md bg-teal-100 px-2.5 py-0.5 text-xs font-bold text-teal-800">
+                          {job.status.replace('_', ' ')}
                         </span>
-                        <span className="rounded-md bg-slate-900 px-2 py-0.5 text-[10px] font-bold text-white uppercase">
-                          {job.status}
-                        </span>
+                        <span className="font-bold text-slate-900">{job.category?.name}</span>
                       </div>
-                      <h3 className="text-base font-bold text-slate-900 mt-1">
-                        Customer: {job.customer?.name || 'Client'} ({job.customer?.phone || 'No phone'})
-                      </h3>
-                      <p className="text-xs text-slate-600 mt-0.5 font-medium">📍 Service Location: {job.address}</p>
+                      <p className="text-xs text-slate-600 mt-1">Customer: <span className="font-semibold">{job.customer?.name}</span> ({job.customer?.phone || 'No phone'})</p>
+                      <p className="text-xs text-slate-600">📍 {job.address}</p>
                     </div>
-
-                    <div className="flex gap-2">
-                      <Link
-                        to={`/track/${job.id}`}
-                        className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
-                      >
-                        🗺️ Open Live Map
-                      </Link>
-                    </div>
+                    <Link
+                      to={`/track/${job.id}`}
+                      className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white hover:bg-slate-800 text-center"
+                    >
+                      🗺️ Open Live Map Tracker
+                    </Link>
                   </div>
 
-                  {/* Stage Advance Buttons */}
-                  <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-200/60">
+                  <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
                     {job.status === 'ACCEPTED' && (
                       <button
                         onClick={() => advanceMutation.mutate({ endpoint: 'en-route', bookingId: job.id })}
-                        disabled={advanceMutation.isPending}
-                        className="flex-1 rounded-xl bg-sky-600 py-3 text-xs font-bold text-white shadow-sm transition hover:bg-sky-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                        className="rounded-xl bg-indigo-600 hover:bg-indigo-700 px-4 py-2 text-xs font-bold text-white"
                       >
-                        🚗 Start Trip / En Route
+                        🚗 Start Travel (En Route)
                       </button>
                     )}
-
                     {job.status === 'EN_ROUTE' && (
                       <button
                         onClick={() => advanceMutation.mutate({ endpoint: 'in-progress', bookingId: job.id })}
-                        disabled={advanceMutation.isPending}
-                        className="flex-1 rounded-xl bg-amber-600 py-3 text-xs font-bold text-white shadow-sm transition hover:bg-amber-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                        className="rounded-xl bg-amber-600 hover:bg-amber-700 px-4 py-2 text-xs font-bold text-white"
                       >
-                        📍 Arrived at Customer Location (Start Service)
+                        🛠️ Arrived & Start Work (In Progress)
                       </button>
                     )}
-
                     {job.status === 'IN_PROGRESS' && (
                       <button
                         onClick={() => advanceMutation.mutate({ endpoint: 'complete', bookingId: job.id })}
-                        disabled={advanceMutation.isPending}
-                        className="flex-1 rounded-xl bg-emerald-600 py-3 text-xs font-bold text-white shadow-sm transition hover:bg-emerald-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                        className="rounded-xl bg-emerald-600 hover:bg-emerald-700 px-4 py-2 text-xs font-bold text-white"
                       >
-                        ✅ Complete Order & Collect Payment
+                        ✅ Finish & Complete Job
                       </button>
                     )}
                   </div>
@@ -555,33 +661,13 @@ export default function ProviderDashboard() {
           </section>
         )}
 
-        {/* 3. Empty State when nothing is pending */}
-        {openJobs.length === 0 && requestedOrders.length === 0 && activeJobs.length === 0 && (
-          <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-12 text-center space-y-3">
-            <span className="text-4xl">📡</span>
-            <h3 className="text-base font-bold text-slate-800">Dispatch Radar Active</h3>
-            <p className="text-xs text-slate-500 max-w-md mx-auto">
-              Listening for new customer service requests nearby. When a customer books or posts a job, it will pop up here instantly via live push!
-            </p>
-          </div>
-        )}
-
-        {/* 4. Completed Order History */}
+        {/* 3. Completed Jobs History */}
         {completedJobs.length > 0 && (
           <section className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-bold text-slate-900">All Completed & Past Orders</h2>
-                <p className="text-xs text-slate-500">Historical records of finished customer jobs</p>
-              </div>
-              <Link to="/history" className="text-xs font-bold text-primary hover:underline">
-                View All History
-              </Link>
-            </div>
-
+            <h2 className="text-base font-bold text-slate-900">Completed Orders History</h2>
             <div className="space-y-3">
               {completedJobs.slice(0, 5).map((booking) => (
-                <BookingCard key={booking.id} booking={booking} isProviderView={true} />
+                <BookingCard key={booking.id} booking={booking} isProviderView />
               ))}
             </div>
           </section>

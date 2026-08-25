@@ -21,7 +21,7 @@ import {
   cancel as cancelBooking,
 } from './server/bookingLifecycle.js';
 import { create as createReview } from './server/reviews.js';
-import { setSocketIO, setProviderPresence, removeProviderBySocketId, setProviderOffline } from './lib/socketEmitter.js';
+import { setSocketIO, setProviderPresence, removeProviderBySocketId, setProviderOffline, haversineKm } from './lib/socketEmitter.js';
 
 const app = express();
 const server = createServer(app);
@@ -360,9 +360,24 @@ app.get('/api/bookings/:bookingId', requireAuth, async (req, res) => {
 });
 
 // Open job board — unassigned broadcast jobs + incoming requests for this provider
-app.get('/api/bookings/open', requireAuth, async (_req, res) => {
+app.get('/api/bookings/open', requireAuth, async (req, res) => {
   try {
     const user = res.locals.user;
+    const qLat = parseFloat(req.query.lat as string);
+    const qLng = parseFloat(req.query.lng as string);
+
+    // Retrieve provider's latest coordinates from query, or from ProviderLocation table
+    let provLat: number | undefined = !isNaN(qLat) ? qLat : undefined;
+    let provLng: number | undefined = !isNaN(qLng) ? qLng : undefined;
+
+    if (provLat === undefined) {
+      const pl = await prisma.providerLocation.findUnique({ where: { providerId: user.userId } });
+      if (pl) {
+        provLat = pl.lat;
+        provLng = pl.lng;
+      }
+    }
+
     const openJobs = await prisma.booking.findMany({
       where: {
         status: 'REQUESTED',
@@ -378,7 +393,21 @@ app.get('/api/bookings/open', requireAuth, async (_req, res) => {
       },
       orderBy: { requestedAt: 'desc' },
     });
-    res.json({ bookings: openJobs });
+
+    const enriched = openJobs.map((b) => {
+      let distanceKm: number | null = null;
+      if (provLat !== undefined && provLng !== undefined && b.lat && b.lng) {
+        distanceKm = parseFloat(haversineKm(provLat, provLng, b.lat, b.lng).toFixed(2));
+      }
+      return { ...b, distanceKm };
+    });
+
+    // If provider GPS is available, sort nearest first
+    if (provLat !== undefined && provLng !== undefined) {
+      enriched.sort((a, b) => (a.distanceKm ?? 9999) - (b.distanceKm ?? 9999));
+    }
+
+    res.json({ bookings: enriched });
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
   }

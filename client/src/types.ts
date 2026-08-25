@@ -50,6 +50,7 @@ export interface Booking {
   address: string;
   lat: number;
   lng: number;
+  description?: string | null;
 }
 
 export interface Review {
