@@ -124,10 +124,10 @@ export default function PostJob() {
     onError: (err: any) => setError(err.message || 'Failed to post job'),
   });
 
-  // Validation: In GPS mode, user only needs to select category!
-  const isGpsValid = locationMode === 'gps' && (gpsStatus === 'locked' || lat !== null);
+  // Validation: In GPS mode, user only needs to select category! Zero address filling needed.
+  const isGpsReady = locationMode === 'gps';
   const isManualValid = locationMode === 'manual' && manualAddress.trim().length > 0;
-  const canPost = Boolean(selectedCategory) && categoryId !== undefined && (isGpsValid || isManualValid);
+  const canPost = Boolean(selectedCategory) && categoryId !== undefined && (isGpsReady || isManualValid);
 
   return (
     <div className="bg-[#f7fafb] py-8 pb-20 md:pb-10 min-h-screen">

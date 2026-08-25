@@ -42,10 +42,14 @@ export async function request(req: Request, res: Response) {
   const numCategoryId = typeof categoryId === 'number' ? categoryId : parseInt(categoryId, 10);
   const numLat = typeof lat === 'number' ? lat : parseFloat(lat);
   const numLng = typeof lng === 'number' ? lng : parseFloat(lng);
-  const radiusKm = typeof customRadius === 'number' ? customRadius : parseFloat(customRadius) || 10;
+  const radiusKm = typeof customRadius === 'number' ? customRadius : parseFloat(customRadius) || 25;
 
-  if (isNaN(numCategoryId) || !address || isNaN(numLat) || isNaN(numLng)) {
-    return res.status(400).json({ error: 'categoryId, address, lat, lng are required' });
+  const finalAddress = (typeof address === 'string' && address.trim())
+    ? address.trim()
+    : (!isNaN(numLat) && !isNaN(numLng) ? `Live GPS Location (${numLat.toFixed(5)}, ${numLng.toFixed(5)})` : '');
+
+  if (isNaN(numCategoryId) || !finalAddress || isNaN(numLat) || isNaN(numLng)) {
+    return res.status(400).json({ error: 'categoryId, lat, and lng are required' });
   }
 
   try {
@@ -69,7 +73,7 @@ export async function request(req: Request, res: Response) {
         customerId: user.userId,
         providerId: providerId || null,
         categoryId: numCategoryId,
-        address,
+        address: finalAddress,
         lat: numLat,
         lng: numLng,
         scheduledAt: parsedDate,
