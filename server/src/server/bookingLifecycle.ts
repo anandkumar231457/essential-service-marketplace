@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
-import { $Enums } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
+import { broadcastNewJob, broadcastJobClaimed, emitBookingUpdate } from '../lib/socketEmitter.js';
 
 // ── Booking state machine ────────────────────────────────────────────────
 const VALID_TRANSITIONS: Record<string, string[]> = {
@@ -23,60 +24,39 @@ function validateTransition(current: string, next: string): string | null {
   return null;
 }
 
-async function transitionBooking(bookingId: string, nextStatus: string, actorId: string) {
-  const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
-  if (!booking) throw new Error('Booking not found');
-
-  const error = validateTransition(booking.status, nextStatus);
-  if (error) throw new Error(error);
-
-  const updateData: any = { status: nextStatus as $Enums.BookingStatus };
-
-  // When a provider accepts an OPEN or direct job, assign them as active provider
-  if (nextStatus === 'ACCEPTED') {
-    updateData.providerId = actorId;
-  }
-
-  const [updated] = await prisma.$transaction([
-    prisma.booking.update({ where: { id: bookingId }, data: updateData }),
-    prisma.bookingStatusHistory.create({
-      data: { bookingId, status: nextStatus as $Enums.BookingStatus },
-    }),
-  ]);
-
-  return updated;
-}
-
 // ── Endpoints ────────────────────────────────────────────────────────────
 
 /**
  * POST /api/bookings/request
- * If providerId is given → direct booking to that specific provider.
- * If providerId is omitted → OPEN/BROADCAST job: any provider can pick it up.
+ * - If providerId is provided → direct booking to that specific specialist.
+ * - If providerId is omitted / null → Zomato/Swiggy style BROADCAST dispatch:
+ *   1. Performs real geospatial PostGIS query for online verified workers within radius (default 5km).
+ *   2. Saves booking in PostgreSQL with providerId = null.
+ *   3. Pushes instant real-time Socket.io 'job:broadcast' event to all online nearby workers.
  */
 export async function request(req: Request, res: Response) {
   const user = res.locals.user;
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
-  const { providerId, categoryId, address, lat, lng, scheduledAt, description } = req.body;
+  const { providerId, categoryId, address, lat, lng, scheduledAt, description, radiusKm: customRadius } = req.body;
 
   const numCategoryId = typeof categoryId === 'number' ? categoryId : parseInt(categoryId, 10);
   const numLat = typeof lat === 'number' ? lat : parseFloat(lat);
   const numLng = typeof lng === 'number' ? lng : parseFloat(lng);
+  const radiusKm = typeof customRadius === 'number' ? customRadius : parseFloat(customRadius) || 5;
 
   if (isNaN(numCategoryId) || !address || isNaN(numLat) || isNaN(numLng)) {
     return res.status(400).json({ error: 'categoryId, address, lat, lng are required' });
   }
 
   try {
-    // If a specific provider was requested, verify they exist and are VERIFIED
+    // If a specific provider was requested, verify they exist
     if (providerId) {
       const provider = await prisma.providerProfile.findUnique({ where: { userId: providerId } });
       if (!provider || provider.verifiedStatus !== 'VERIFIED') {
         return res.status(400).json({ error: 'Selected provider not available' });
       }
     }
-    // If no providerId → leave null (open broadcast — any provider can accept)
 
     let parsedDate: Date | null = null;
     if (scheduledAt) {
@@ -84,10 +64,11 @@ export async function request(req: Request, res: Response) {
       if (!isNaN(d.getTime())) parsedDate = d;
     }
 
+    // 1. Save booking to PostgreSQL with providerId = null for open jobs
     const booking = await prisma.booking.create({
       data: {
         customerId: user.userId,
-        providerId: providerId || null,  // NULL = open job for any provider
+        providerId: providerId || null,
         categoryId: numCategoryId,
         address,
         lat: numLat,
@@ -96,27 +77,125 @@ export async function request(req: Request, res: Response) {
         description: description || null,
         status: 'REQUESTED',
       },
+      include: {
+        category: true,
+        customer: { select: { name: true, phone: true } },
+      },
     });
 
     await prisma.bookingStatusHistory.create({
       data: { bookingId: booking.id, status: 'REQUESTED' },
     });
 
-    return res.status(201).json({ booking });
+    // 2. Real Geospatial Query (PostGIS ST_DWithin + ST_Distance)
+    let nearbyWorkersCount = 0;
+    try {
+      const nearbyWorkers: any[] = await prisma.$queryRaw(Prisma.sql`
+        SELECT
+          pl."providerId",
+          u.name,
+          u.phone,
+          pp.category,
+          pl.lat,
+          pl.lng,
+          ROUND((ST_Distance(ST_SetSRID(ST_MakePoint(pl.lng, pl.lat), 4326)::geography, ST_SetSRID(ST_MakePoint(${numLng}, ${numLat}), 4326)::geography) / 1000)::numeric, 2) AS "distanceKm"
+        FROM "ProviderLocation" pl
+        JOIN "User" u ON u.id = pl."providerId"
+        JOIN "ProviderProfile" pp ON pp."userId" = pl."providerId"
+        WHERE pl."isOnline" = true
+          AND pp."verifiedStatus" = 'VERIFIED'
+          AND ST_DWithin(
+            ST_SetSRID(ST_MakePoint(pl.lng, pl.lat), 4326)::geography,
+            ST_SetSRID(ST_MakePoint(${numLng}, ${numLat}), 4326)::geography,
+            ${radiusKm * 1000}
+          )
+        ORDER BY "distanceKm" ASC
+      `);
+      nearbyWorkersCount = nearbyWorkers.length;
+    } catch {
+      // fallback count
+    }
+
+    // 3. Real-Time Push via Socket.io to all nearby workers
+    broadcastNewJob(booking, radiusKm, nearbyWorkersCount);
+
+    return res.status(201).json({
+      booking,
+      nearbyWorkersCount,
+      radiusKm,
+    });
   } catch (err: any) {
     console.error('Error creating booking:', err);
     return res.status(500).json({ error: err.message || 'Failed to create booking' });
   }
 }
 
+/**
+ * POST /api/bookings/:bookingId/rebroadcast
+ * Expands search radius (e.g. 5km -> 15km -> 25km) and re-broadcasts unassigned jobs.
+ */
+export async function rebroadcast(req: Request, res: Response) {
+  const user = res.locals.user;
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+  const { bookingId } = req.params;
+  const radiusKm = parseFloat(req.body.radiusKm ?? '15') || 15;
+
+  try {
+    const booking = await prisma.booking.findUnique({
+      where: { id: bookingId },
+      include: { category: true, customer: { select: { name: true, phone: true } } },
+    });
+
+    if (!booking) return res.status(404).json({ error: 'Booking not found' });
+    if (booking.status !== 'REQUESTED' || booking.providerId !== null) {
+      return res.status(400).json({ error: 'Booking is already accepted or not open' });
+    }
+
+    // PostGIS query with expanded radius
+    let nearbyWorkersCount = 0;
+    try {
+      const nearbyWorkers: any[] = await prisma.$queryRaw(Prisma.sql`
+        SELECT pl."providerId"
+        FROM "ProviderLocation" pl
+        JOIN "ProviderProfile" pp ON pp."userId" = pl."providerId"
+        WHERE pl."isOnline" = true
+          AND pp."verifiedStatus" = 'VERIFIED'
+          AND ST_DWithin(
+            ST_SetSRID(ST_MakePoint(pl.lng, pl.lat), 4326)::geography,
+            ST_SetSRID(ST_MakePoint(${booking.lng}, ${booking.lat}), 4326)::geography,
+            ${radiusKm * 1000}
+          )
+      `);
+      nearbyWorkersCount = nearbyWorkers.length;
+    } catch {
+      // fallback
+    }
+
+    broadcastNewJob(booking, radiusKm, nearbyWorkersCount);
+
+    return res.json({ success: true, bookingId, radiusKm, nearbyWorkersCount });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to re-broadcast' });
+  }
+}
+
+/**
+ * POST /api/bookings/accept
+ * ATOMIC FIRST-ACCEPT-WINS:
+ * Uses a conditional update where status = 'REQUESTED' AND (providerId IS NULL OR providerId = current_user).
+ * If another worker accepted first, count = 0 → returns 409 Conflict.
+ * If winner → sets providerId, status = ACCEPTED, emits 'job:claimed' and 'booking:status-update'.
+ */
 export async function accept(req: Request, res: Response) {
   const user = res.locals.user;
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
   const { bookingId } = req.body;
   if (!bookingId) return res.status(400).json({ error: 'bookingId is required' });
 
   try {
-    // Ensure provider profile exists for this accepting user
+    // 1. Ensure provider profile exists and is verified
     await prisma.providerProfile.upsert({
       where: { userId: user.userId },
       create: {
@@ -132,71 +211,168 @@ export async function accept(req: Request, res: Response) {
       },
     });
 
-    const booking = await transitionBooking(bookingId, 'ACCEPTED', user.userId);
-    return res.json({ booking });
-  } catch (e) {
-    return res.status(400).json({ error: (e as Error).message });
+    // 2. ATOMIC UPDATE: Only update if booking is still REQUESTED and unassigned (or assigned to this user)
+    const result = await prisma.booking.updateMany({
+      where: {
+        id: bookingId,
+        status: 'REQUESTED',
+        OR: [
+          { providerId: null },
+          { providerId: user.userId },
+        ],
+      },
+      data: {
+        status: 'ACCEPTED',
+        providerId: user.userId,
+      },
+    });
+
+    if (result.count === 0) {
+      // Another specialist already grabbed this order!
+      return res.status(409).json({
+        error: 'This order was already accepted by another specialist! It has been removed from your queue.',
+        alreadyTaken: true,
+      });
+    }
+
+    // 3. Record audit history
+    await prisma.bookingStatusHistory.create({
+      data: { bookingId, status: 'ACCEPTED' },
+    });
+
+    // 4. Fetch full updated booking
+    const updatedBooking = await prisma.booking.findUnique({
+      where: { id: bookingId },
+      include: {
+        category: true,
+        customer: { select: { name: true, phone: true } },
+        provider: { select: { id: true, name: true, phone: true } },
+      },
+    });
+
+    // 5. Broadcast in real time:
+    // a) Remove job from all other workers' dashboards
+    broadcastJobClaimed(bookingId, user.userId, updatedBooking?.provider?.name);
+
+    // b) Notify customer tracking room that order was accepted
+    emitBookingUpdate(bookingId, 'ACCEPTED', updatedBooking?.provider);
+
+    return res.json({ booking: updatedBooking });
+  } catch (e: any) {
+    return res.status(500).json({ error: e.message || 'Failed to accept booking' });
   }
 }
 
+/** POST /api/bookings/en-route — provider en route (ACCEPTED → EN_ROUTE). */
 export async function enRoute(req: Request, res: Response) {
   const user = res.locals.user;
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
   const { bookingId } = req.body;
   if (!bookingId) return res.status(400).json({ error: 'bookingId is required' });
+
   try {
-    const booking = await transitionBooking(bookingId, 'EN_ROUTE', user.userId);
-    return res.json({ booking });
-  } catch (e) {
-    return res.status(400).json({ error: (e as Error).message });
+    const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
+    if (!booking) return res.status(404).json({ error: 'Booking not found' });
+    if (booking.providerId !== user.userId) return res.status(403).json({ error: 'Not assigned to you' });
+
+    const err = validateTransition(booking.status, 'EN_ROUTE');
+    if (err) return res.status(400).json({ error: err });
+
+    const [updated] = await prisma.$transaction([
+      prisma.booking.update({ where: { id: bookingId }, data: { status: 'EN_ROUTE' } }),
+      prisma.bookingStatusHistory.create({ data: { bookingId, status: 'EN_ROUTE' } }),
+    ]);
+
+    emitBookingUpdate(bookingId, 'EN_ROUTE');
+    return res.json({ booking: updated });
+  } catch (e: any) {
+    return res.status(500).json({ error: e.message });
   }
 }
 
+/** POST /api/bookings/in-progress — provider arrived (EN_ROUTE → IN_PROGRESS). */
 export async function inProgress(req: Request, res: Response) {
   const user = res.locals.user;
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
   const { bookingId } = req.body;
   if (!bookingId) return res.status(400).json({ error: 'bookingId is required' });
+
   try {
-    const booking = await transitionBooking(bookingId, 'IN_PROGRESS', user.userId);
-    return res.json({ booking });
-  } catch (e) {
-    return res.status(400).json({ error: (e as Error).message });
+    const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
+    if (!booking) return res.status(404).json({ error: 'Booking not found' });
+    if (booking.providerId !== user.userId) return res.status(403).json({ error: 'Not assigned to you' });
+
+    const err = validateTransition(booking.status, 'IN_PROGRESS');
+    if (err) return res.status(400).json({ error: err });
+
+    const [updated] = await prisma.$transaction([
+      prisma.booking.update({ where: { id: bookingId }, data: { status: 'IN_PROGRESS' } }),
+      prisma.bookingStatusHistory.create({ data: { bookingId, status: 'IN_PROGRESS' } }),
+    ]);
+
+    emitBookingUpdate(bookingId, 'IN_PROGRESS');
+    return res.json({ booking: updated });
+  } catch (e: any) {
+    return res.status(500).json({ error: e.message });
   }
 }
 
+/** POST /api/bookings/complete — provider marks done (IN_PROGRESS → COMPLETED). */
 export async function complete(req: Request, res: Response) {
   const user = res.locals.user;
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
   const { bookingId } = req.body;
   if (!bookingId) return res.status(400).json({ error: 'bookingId is required' });
+
   try {
-    const booking = await transitionBooking(bookingId, 'COMPLETED', user.userId);
-    return res.json({ booking });
-  } catch (e) {
-    return res.status(400).json({ error: (e as Error).message });
+    const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
+    if (!booking) return res.status(404).json({ error: 'Booking not found' });
+    if (booking.providerId !== user.userId) return res.status(403).json({ error: 'Not assigned to you' });
+
+    const err = validateTransition(booking.status, 'COMPLETED');
+    if (err) return res.status(400).json({ error: err });
+
+    const [updated] = await prisma.$transaction([
+      prisma.booking.update({ where: { id: bookingId }, data: { status: 'COMPLETED' } }),
+      prisma.bookingStatusHistory.create({ data: { bookingId, status: 'COMPLETED' } }),
+    ]);
+
+    emitBookingUpdate(bookingId, 'COMPLETED');
+    return res.json({ booking: updated });
+  } catch (e: any) {
+    return res.status(500).json({ error: e.message });
   }
 }
 
+/** POST /api/bookings/cancel — customer or provider cancels. */
 export async function cancel(req: Request, res: Response) {
   const user = res.locals.user;
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
   const { bookingId } = req.body;
   if (!bookingId) return res.status(400).json({ error: 'bookingId is required' });
+
   try {
     const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
     if (!booking) return res.status(404).json({ error: 'Booking not found' });
     if (booking.customerId !== user.userId && booking.providerId !== user.userId) {
       return res.status(403).json({ error: 'Not authorized to cancel this booking' });
     }
+
     const err = validateTransition(booking.status, 'CANCELLED');
     if (err) return res.status(400).json({ error: err });
+
     const [updated] = await prisma.$transaction([
       prisma.booking.update({ where: { id: bookingId }, data: { status: 'CANCELLED' } }),
       prisma.bookingStatusHistory.create({ data: { bookingId, status: 'CANCELLED' } }),
     ]);
+
+    emitBookingUpdate(bookingId, 'CANCELLED');
     return res.json({ booking: updated });
-  } catch (e) {
-    return res.status(400).json({ error: (e as Error).message });
+  } catch (e: any) {
+    return res.status(500).json({ error: e.message });
   }
 }

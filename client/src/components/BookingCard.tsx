@@ -4,8 +4,8 @@ import StatusBadge from './StatusBadge';
 
 export type HistoryBooking = Booking & {
   category?: { name: string };
-  provider?: { name: string };
-  customer?: { name: string };
+  provider?: { id?: string; name: string; phone?: string };
+  customer?: { id?: string; name: string; phone?: string };
   review?: { id: number };
 };
 

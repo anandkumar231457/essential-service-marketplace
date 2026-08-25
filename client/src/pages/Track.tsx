@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
-import { io, Socket } from 'socket.io-client';
 import { api } from '../lib/api';
+import { getSocket } from '../lib/socket';
 import { useAuthStore } from '../store/authStore';
 import type { Booking } from '../types';
 import StatusBadge from '../components/StatusBadge';
@@ -30,7 +30,7 @@ interface ProviderStatus {
 const STEPS = ['REQUESTED', 'ACCEPTED', 'EN_ROUTE', 'IN_PROGRESS', 'COMPLETED'];
 
 const STEP_LABELS: Record<string, string> = {
-  REQUESTED: 'Order Placed',
+  REQUESTED: 'Finding Specialist',
   ACCEPTED: 'Order Accepted',
   EN_ROUTE: 'Specialist En Route',
   IN_PROGRESS: 'Service Underway',
@@ -42,16 +42,34 @@ export default function Track() {
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
 
-  const [booking, setBooking] = useState<(Booking & { provider?: { name: string; phone: string }; customer?: { name: string; phone: string }; category?: { name: string } }) | null>(null);
+  const [booking, setBooking] = useState<
+    | (Booking & {
+        provider?: { id?: string; name: string; phone: string };
+        customer?: { name: string; phone: string };
+        category?: { name: string };
+      })
+    | null
+  >(null);
   const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null);
   const [socketConnected, setSocketConnected] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
 
-  const fetchBooking = async () => {
+  // Re-broadcast and Search Radius expansion state
+  const [searchRadius, setSearchRadius] = useState(5);
+  const [searchSeconds, setSearchSeconds] = useState(0);
+  const searchTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const fetchBooking = useCallback(async () => {
     if (!bookingId) return;
     try {
-      const data = await api.get<{ booking: Booking & { provider?: { name: string; phone: string }; customer?: { name: string; phone: string }; category?: { name: string } } }>(`/api/bookings/${bookingId}`);
+      const data = await api.get<{
+        booking: Booking & {
+          provider?: { id?: string; name: string; phone: string };
+          customer?: { name: string; phone: string };
+          category?: { name: string };
+        };
+      }>(`/api/bookings/${bookingId}`);
       setBooking(data.booking);
       if (data.booking.providerId) {
         const status = await api.get<ProviderStatus>(`/api/providers/${data.booking.providerId}/status`);
@@ -60,44 +78,97 @@ export default function Track() {
     } catch {
       // ignore
     }
-  };
+  }, [bookingId]);
 
   useEffect(() => {
     fetchBooking();
-  }, [bookingId]);
+  }, [fetchBooking]);
 
+  // Socket.io live listener
   useEffect(() => {
     if (!bookingId) return;
+    const socket = getSocket();
 
-    let socket: Socket | null = null;
-    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    const handleConnect = () => {
+      setSocketConnected(true);
+      socket.emit('join-booking-room', bookingId);
+    };
 
-    try {
-      const socketUrl = import.meta.env.VITE_SOCKET_URL || '/';
-      socket = io(socketUrl, { transports: ['websocket'] });
-      socket.on('connect', () => {
-        setSocketConnected(true);
-        socket?.emit('join-booking-room', bookingId);
-      });
-      socket.on('provider:location-update', (data: ProviderStatus) => {
-        setProviderStatus(data);
-      });
-      socket.on('provider:status-update', (data: ProviderStatus) => {
-        setProviderStatus(data);
+    const handleDisconnect = () => setSocketConnected(false);
+
+    const handleLocationUpdate = (data: ProviderStatus) => {
+      setProviderStatus(data);
+    };
+
+    const handleStatusUpdate = (data: { status: string; provider?: any }) => {
+      setStatusMessage(`✓ Status changed to ${data.status}!`);
+      fetchBooking();
+      setTimeout(() => setStatusMessage(''), 4000);
+    };
+
+    const handleJobClaimed = (data: { bookingId: string; assignedTo: string; providerName?: string }) => {
+      if (data.bookingId === bookingId) {
+        setStatusMessage(`🎉 Order accepted by ${data.providerName || 'a specialist'}!`);
         fetchBooking();
-      });
-      socket.on('disconnect', () => setSocketConnected(false));
-    } catch {
-      // ignore socket errors
-    }
+        setTimeout(() => setStatusMessage(''), 4000);
+      }
+    };
 
-    pollTimer = setInterval(fetchBooking, 3000);
+    socket.on('connect', handleConnect);
+    socket.on('disconnect', handleDisconnect);
+    socket.on('provider:location-update', handleLocationUpdate);
+    socket.on('provider:status-update', handleStatusUpdate);
+    socket.on('booking:status-update', handleStatusUpdate);
+    socket.on('job:claimed', handleJobClaimed);
+
+    if (socket.connected) handleConnect();
+
+    const pollTimer = setInterval(fetchBooking, 4000);
 
     return () => {
-      socket?.disconnect();
-      if (pollTimer) clearInterval(pollTimer);
+      socket.off('connect', handleConnect);
+      socket.off('disconnect', handleDisconnect);
+      socket.off('provider:location-update', handleLocationUpdate);
+      socket.off('provider:status-update', handleStatusUpdate);
+      socket.off('booking:status-update', handleStatusUpdate);
+      socket.off('job:claimed', handleJobClaimed);
+      clearInterval(pollTimer);
     };
-  }, [bookingId]);
+  }, [bookingId, fetchBooking]);
+
+  // Timeout + Automatic Re-broadcast when waiting for a specialist
+  useEffect(() => {
+    const isUnassignedRequested = booking?.status === 'REQUESTED' && !booking?.providerId;
+
+    if (isUnassignedRequested) {
+      searchTimerRef.current = setInterval(() => {
+        setSearchSeconds((prev) => {
+          const next = prev + 1;
+          // At 25 seconds, widen search to 15km
+          if (next === 25) {
+            setSearchRadius(15);
+            api.post(`/api/bookings/${bookingId}/rebroadcast`, { radiusKm: 15 }).catch(() => {});
+            setStatusMessage('📡 Widening search radius to 15km to find nearby specialists...');
+            setTimeout(() => setStatusMessage(''), 4000);
+          }
+          // At 50 seconds, widen search to 25km
+          if (next === 50) {
+            setSearchRadius(25);
+            api.post(`/api/bookings/${bookingId}/rebroadcast`, { radiusKm: 25 }).catch(() => {});
+            setStatusMessage('📡 Widening search radius to 25km across your region...');
+            setTimeout(() => setStatusMessage(''), 4000);
+          }
+          return next;
+        });
+      }, 1000);
+    } else {
+      if (searchTimerRef.current) clearInterval(searchTimerRef.current);
+    }
+
+    return () => {
+      if (searchTimerRef.current) clearInterval(searchTimerRef.current);
+    };
+  }, [booking?.status, booking?.providerId, bookingId]);
 
   const advanceStage = async (endpoint: string) => {
     if (!bookingId) return;
@@ -114,14 +185,27 @@ export default function Track() {
     }
   };
 
+  const retryBroadcast = async () => {
+    if (!bookingId) return;
+    setSearchSeconds(0);
+    setSearchRadius(25);
+    try {
+      await api.post(`/api/bookings/${bookingId}/rebroadcast`, { radiusKm: 25 });
+      setStatusMessage('📡 Re-broadcasted to all active specialists in your region!');
+      setTimeout(() => setStatusMessage(''), 4000);
+    } catch (err: any) {
+      setStatusMessage(`⚠️ ${err.message || 'Rebroadcast failed'}`);
+    }
+  };
+
   const currentStepIdx = booking ? STEPS.indexOf(booking.status) : 0;
   const isTerminated = booking ? ['CANCELLED', 'REJECTED'].includes(booking.status) : false;
-  const isProvider = user?.role === 'PROVIDER';
+  const isProvider = user?.role === 'PROVIDER' || (booking?.providerId && booking.providerId === user?.id);
 
   return (
-    <div className="bg-[#f7fafb] px-5 py-8 lg:px-8 pb-20 md:pb-10">
-      <div className="mx-auto max-w-4xl">
-        <header className="flex items-center justify-between mb-6">
+    <div className="bg-[#f7fafb] px-5 py-8 lg:px-8 pb-20 md:pb-10 min-h-screen">
+      <div className="mx-auto max-w-4xl space-y-6">
+        <header className="flex items-center justify-between">
           <button
             onClick={() => navigate(isProvider ? '/provider' : '/history')}
             className="text-xs font-semibold text-primary hover:underline"
@@ -140,8 +224,8 @@ export default function Track() {
         </header>
 
         {statusMessage && (
-          <div className="mb-4 rounded-xl bg-slate-900 p-3 text-xs font-semibold text-white shadow-md animate-pulse">
-            {statusMessage}
+          <div className="rounded-xl bg-slate-900 p-4 text-xs font-semibold text-white shadow-lg animate-pulse flex items-center gap-2">
+            <span>ℹ️</span> {statusMessage}
           </div>
         )}
 
@@ -158,7 +242,9 @@ export default function Track() {
                 <p className="mt-1 text-xs font-medium text-slate-700">
                   {isProvider
                     ? `Customer: ${booking.customer?.name || 'Customer'}`
-                    : `Assigned Specialist: ${booking.provider?.name || 'Local Pro'}`}
+                    : booking.provider?.name
+                    ? `Assigned Specialist: ${booking.provider.name}`
+                    : `Assigned Specialist: 🛵 Broadcasting live to nearby pros (within ${searchRadius}km)…`}
                 </p>
               </div>
 
@@ -171,6 +257,50 @@ export default function Track() {
                 </Link>
               )}
             </div>
+
+            {/* UNASSIGNED BROADCAST WAITING RADAR (CUSTOMER VIEW) */}
+            {!isProvider && booking.status === 'REQUESTED' && !booking.providerId && (
+              <div className="rounded-3xl border-2 border-amber-300 bg-amber-50/70 p-6 shadow-md space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="grid h-10 w-10 place-items-center rounded-full bg-amber-500 text-white font-bold text-lg animate-spin">
+                      ⏳
+                    </span>
+                    <div>
+                      <h3 className="font-bold text-slate-900 text-base">
+                        Broadcasting to Nearby Specialists
+                      </h3>
+                      <p className="text-xs text-slate-600">
+                        Search Radius: <span className="font-bold text-amber-900">{searchRadius} km</span> • Searching for{' '}
+                        {searchSeconds}s
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={retryBroadcast}
+                    className="rounded-xl border border-amber-300 bg-white px-3.5 py-1.5 text-xs font-bold text-amber-800 hover:bg-amber-100 shadow-sm"
+                  >
+                    🔄 Widen & Re-broadcast
+                  </button>
+                </div>
+
+                <div className="w-full bg-amber-200 rounded-full h-2 overflow-hidden">
+                  <div
+                    className="bg-amber-600 h-2 rounded-full transition-all duration-1000"
+                    style={{ width: `${Math.min(100, (searchSeconds / 60) * 100)}%` }}
+                  ></div>
+                </div>
+
+                {searchSeconds > 60 && (
+                  <div className="rounded-xl bg-white/80 p-3 text-xs text-slate-700 flex items-center justify-between">
+                    <span>Specialists are currently busy. You can continue waiting or schedule for later.</span>
+                    <button onClick={retryBroadcast} className="font-bold text-amber-800 underline ml-2">
+                      Try Again
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* SWIGGY-STYLE PROVIDER DRIVER ACTIONS PANEL */}
             {isProvider && !isTerminated && (

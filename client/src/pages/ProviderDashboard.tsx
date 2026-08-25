@@ -1,9 +1,36 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
+import { getSocket } from '../lib/socket';
 import { useAuthStore } from '../store/authStore';
 import BookingCard, { type HistoryBooking } from '../components/BookingCard';
+
+// Web Audio API chime helper for incoming order notification
+function playOrderChime() {
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.12); // A5
+    osc.frequency.setValueAtTime(1174.66, ctx.currentTime + 0.24); // D6
+
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.6);
+  } catch {
+    // AudioContext blocked or not supported
+  }
+}
 
 export default function ProviderDashboard() {
   const user = useAuthStore((state) => state.user);
@@ -11,38 +38,140 @@ export default function ProviderDashboard() {
   const [available, setAvailable] = useState(true);
   const [actionError, setActionError] = useState('');
   const [actionSuccess, setActionSuccess] = useState('');
+  const [liveLocation, setLiveLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [realtimeAlert, setRealtimeAlert] = useState<{ message: string; category?: string } | null>(null);
 
-  // Auto-register provider location on load so provider appears on customer search
-  useEffect(() => {
-    const registerLocation = async () => {
+  const watchTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // 1. Send Presence + GPS Coordinates to Backend
+  const sendPresencePing = useCallback(
+    async (isOnline: boolean) => {
+      if (!user?.id) return;
       try {
-        const coords = await new Promise<{ lat: number; lng: number }>((resolve) => {
-          if (typeof user?.lat === 'number' && typeof user?.lng === 'number') {
-            resolve({ lat: user.lat, lng: user.lng });
-          } else if (navigator.geolocation) {
+        let lat = user.lat || 12.9352;
+        let lng = user.lng || 77.6245;
+
+        if (navigator.geolocation && isOnline) {
+          await new Promise<void>((resolve) => {
             navigator.geolocation.getCurrentPosition(
-              (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-              () => resolve({ lat: 12.9352, lng: 77.6245 })
+              (pos) => {
+                lat = pos.coords.latitude;
+                lng = pos.coords.longitude;
+                setLiveLocation({ lat, lng });
+                resolve();
+              },
+              () => resolve(),
+              { timeout: 5000, enableHighAccuracy: true }
             );
+          });
+        }
+
+        await api.post('/api/providers/ping', { lat, lng, isOnline });
+
+        const socket = getSocket();
+        if (socket.connected) {
+          if (isOnline) {
+            socket.emit('set-provider-id', user.id);
+            socket.emit('provider:online', { providerId: user.id, lat, lng });
           } else {
-            resolve({ lat: 12.9352, lng: 77.6245 });
+            socket.emit('provider:offline', { providerId: user.id });
           }
-        });
-        await api.post('/api/providers/ping', { ...coords, isOnline: true });
+        }
       } catch {
-        // ignore
+        // ignore network glitches
+      }
+    },
+    [user]
+  );
+
+  // 2. Presence Lifecycle: Refresh location every 20s while online
+  useEffect(() => {
+    if (available) {
+      sendPresencePing(true);
+      watchTimerRef.current = setInterval(() => {
+        sendPresencePing(true);
+      }, 20000);
+    } else {
+      sendPresencePing(false);
+      if (watchTimerRef.current) clearInterval(watchTimerRef.current);
+    }
+
+    return () => {
+      if (watchTimerRef.current) clearInterval(watchTimerRef.current);
+    };
+  }, [available, sendPresencePing]);
+
+  // 3. Socket.io Real-Time Push Listener for Zomato/Swiggy Instant Dispatch
+  useEffect(() => {
+    const socket = getSocket();
+
+    const handleConnect = () => {
+      if (user?.id) {
+        socket.emit('set-provider-id', user.id);
+        if (available) {
+          socket.emit('provider:online', { providerId: user.id, lat: liveLocation?.lat, lng: liveLocation?.lng });
+        }
       }
     };
-    registerLocation();
-  }, [user]);
 
-  const { data, isLoading } = useQuery({
+    const handleJobBroadcast = (data: { booking: HistoryBooking; radiusKm?: number; nearbyWorkersCount?: number }) => {
+      // Play audio chime immediately
+      playOrderChime();
+
+      // Invalidate queries so React Query updates the open jobs instantly
+      queryClient.invalidateQueries({ queryKey: ['open-jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['my-bookings'] });
+
+      // Show alert banner
+      setRealtimeAlert({
+        message: `🔔 New Order Dispatch: ${data.booking.category?.name || 'Service'} requested nearby (${data.booking.address})!`,
+        category: data.booking.category?.name,
+      });
+
+      setTimeout(() => setRealtimeAlert(null), 8000);
+    };
+
+    const handleJobClaimed = (data: { bookingId: string; assignedTo: string; providerName?: string }) => {
+      // If someone else claimed it, remove it immediately from our board
+      if (data.assignedTo !== user?.id) {
+        queryClient.setQueryData<{ bookings: HistoryBooking[] }>(['open-jobs'], (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            bookings: old.bookings.filter((b) => b.id !== data.bookingId),
+          };
+        });
+        queryClient.invalidateQueries({ queryKey: ['open-jobs'] });
+      }
+    };
+
+    const handleBookingStatusChanged = () => {
+      queryClient.invalidateQueries({ queryKey: ['my-bookings'] });
+      queryClient.invalidateQueries({ queryKey: ['open-jobs'] });
+    };
+
+    socket.on('connect', handleConnect);
+    socket.on('job:broadcast', handleJobBroadcast);
+    socket.on('job:claimed', handleJobClaimed);
+    socket.on('booking:status-changed', handleBookingStatusChanged);
+
+    if (socket.connected) handleConnect();
+
+    return () => {
+      socket.off('connect', handleConnect);
+      socket.off('job:broadcast', handleJobBroadcast);
+      socket.off('job:claimed', handleJobClaimed);
+      socket.off('booking:status-changed', handleBookingStatusChanged);
+    };
+  }, [user, available, queryClient, liveLocation]);
+
+  // 4. Data queries (with fast background refresh)
+  const { data } = useQuery({
     queryKey: ['my-bookings'],
     queryFn: () => api.get<{ bookings: HistoryBooking[] }>('/api/bookings/my'),
-    refetchInterval: 3000,
+    refetchInterval: 5000,
   });
 
-  // Open job board — unassigned jobs / open orders in area
   const { data: openJobsData } = useQuery({
     queryKey: ['open-jobs'],
     queryFn: () => api.get<{ bookings: HistoryBooking[] }>('/api/bookings/open'),
@@ -55,7 +184,7 @@ export default function ProviderDashboard() {
   const completedJobs = allBookings.filter((b) => b.status === 'COMPLETED');
   const openJobs = openJobsData?.bookings ?? [];
 
-  // Mutation for advancing order lifecycle
+  // 5. Mutation for advancing order lifecycle with atomic first-accept handling
   const advanceMutation = useMutation({
     mutationFn: async ({ endpoint, bookingId }: { endpoint: string; bookingId: string }) => {
       return api.post(`/api/bookings/${endpoint}`, { bookingId });
@@ -66,68 +195,98 @@ export default function ProviderDashboard() {
       setActionError('');
       const actionName =
         variables.endpoint === 'accept'
-          ? 'Order Accepted! You are now assigned to this customer.'
+          ? '🎉 Order Accepted! You are now assigned to this customer.'
           : variables.endpoint === 'en-route'
-          ? 'Status updated to En Route! Customer can see you traveling.'
+          ? '🚗 Status updated to En Route! Customer can see you traveling.'
           : variables.endpoint === 'in-progress'
-          ? 'Service started! Timer & work in progress.'
+          ? '🛠️ Service started! Timer & work in progress.'
           : variables.endpoint === 'complete'
-          ? 'Job Completed successfully! Payout recorded.'
+          ? '✅ Job Completed successfully! Payout recorded.'
           : 'Order updated.';
       setActionSuccess(actionName);
       setTimeout(() => setActionSuccess(''), 4000);
     },
     onError: (err: any) => {
-      setActionError(err.message || 'Action failed');
+      // If order was already accepted by another specialist (409 Conflict)
+      if (err?.status === 409 || err?.message?.includes('already accepted')) {
+        setActionError('⚠️ Another specialist was faster! This order has already been claimed.');
+        queryClient.invalidateQueries({ queryKey: ['open-jobs'] });
+      } else {
+        setActionError(err.message || 'Action failed');
+      }
       setActionSuccess('');
     },
   });
 
-  const setAvailability = async () => {
+  const toggleAvailability = async () => {
     const next = !available;
-    try {
-      const lat = user?.lat || 12.9352;
-      const lng = user?.lng || 77.6245;
-      await api.post('/api/providers/ping', { lat, lng, isOnline: next });
-    } catch {
-      // ignore mock ping
-    }
     setAvailable(next);
+    await sendPresencePing(next);
   };
 
   return (
-    <div className="bg-[#f7fafb] px-5 py-10 lg:px-8 pb-20 md:pb-10">
+    <div className="bg-[#f7fafb] px-5 py-10 lg:px-8 pb-20 md:pb-10 min-h-screen">
       <div className="mx-auto max-w-6xl space-y-8">
         {/* Top Header & Availability Toggle */}
         <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div>
-            <p className="text-xs font-semibold text-primary uppercase tracking-wide">PRO DISPATCH CONSOLE</p>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-primary uppercase tracking-wide">PRO DISPATCH CONSOLE</span>
+              <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
+                available ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'
+              }`}>
+                <span className={`h-2 w-2 rounded-full ${available ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`}></span>
+                {available ? 'Radar Active (Online)' : 'Radar Inactive (Offline)'}
+              </span>
+            </div>
             <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-900">
               Welcome back, {user?.name?.split(' ')[0] || 'Pro'}
             </h1>
-            <p className="mt-1 text-xs text-slate-500">Pick up incoming customer orders, manage active dispatches, and track earnings.</p>
+            <p className="mt-1 text-xs text-slate-500">
+              Pick up incoming customer orders, manage active dispatches, and track earnings.
+            </p>
           </div>
 
           <button
-            onClick={() => void setAvailability()}
-            className={`rounded-xl px-5 py-2.5 text-xs font-semibold text-white transition shadow-sm ${
-              available ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-slate-500 hover:bg-slate-600'
+            onClick={toggleAvailability}
+            className={`rounded-xl px-5 py-3 text-xs font-bold text-white transition shadow-md flex items-center gap-2 ${
+              available ? 'bg-emerald-600 hover:bg-emerald-700 ring-2 ring-emerald-300' : 'bg-slate-700 hover:bg-slate-800'
             }`}
           >
-            {available ? '● Online & Accepting Orders' : '○ Offline (Not Receiving Orders)'}
+            <span className="text-sm">{available ? '🟢' : '⚪'}</span>
+            {available ? 'Online — Ready to Accept Orders' : 'Go Online to Receive Jobs'}
           </button>
         </div>
 
-        {/* Notifications / Alerts */}
+        {/* Real-time Order Arrival Banner */}
+        {realtimeAlert && (
+          <div className="rounded-2xl border-2 border-violet-400 bg-gradient-to-r from-violet-600 to-indigo-700 p-5 text-white shadow-xl animate-bounce flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">🔔</span>
+              <div>
+                <p className="font-bold text-sm">{realtimeAlert.message}</p>
+                <p className="text-xs text-violet-200">Tap Accept below to claim this job before other specialists!</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setRealtimeAlert(null)}
+              className="rounded-lg bg-white/20 px-3 py-1 text-xs font-semibold hover:bg-white/30"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {/* Action Notifications / Alerts */}
         {actionSuccess && (
-          <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 text-xs font-semibold text-emerald-800 animate-pulse">
-            ✓ {actionSuccess}
+          <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 text-xs font-bold text-emerald-800 animate-pulse flex items-center gap-2">
+            <span>✓</span> {actionSuccess}
           </div>
         )}
 
         {actionError && (
-          <div className="rounded-xl bg-rose-50 border border-rose-200 p-4 text-xs font-semibold text-rose-800">
-            {actionError}
+          <div className="rounded-xl bg-rose-50 border border-rose-200 p-4 text-xs font-bold text-rose-800 flex items-center gap-2">
+            <span>⚠️</span> {actionError}
           </div>
         )}
 
@@ -180,36 +339,46 @@ export default function ProviderDashboard() {
           </div>
         </div>
 
-        {/* 0. OPEN JOB BOARD — Swiggy-style unassigned jobs anyone can pick */}
+        {/* 0. OPEN BROADCAST JOB BOARD — Zomato/Swiggy Style Instant Dispatch */}
         {openJobs.length > 0 && (
-          <section className="rounded-3xl border-2 border-violet-300 bg-violet-50/50 p-6 shadow-md space-y-4">
+          <section className="rounded-3xl border-2 border-violet-400 bg-violet-50/70 p-6 shadow-lg space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="grid h-8 w-8 place-items-center rounded-full bg-violet-600 text-white font-bold animate-bounce">
+                <span className="grid h-10 w-10 place-items-center rounded-full bg-violet-600 text-white font-bold text-lg animate-bounce">
                   🛵
                 </span>
                 <div>
-                  <h2 className="text-lg font-bold text-slate-900">Open Job Board — Pick Up Near You</h2>
-                  <p className="text-xs text-slate-600">Customers in your area posted jobs — tap Accept to take the order</p>
+                  <h2 className="text-lg font-bold text-slate-900">Live Dispatch Radar — Open Orders Near You</h2>
+                  <p className="text-xs text-slate-600">
+                    Customers posted work orders — tap Accept to instantly claim the job!
+                  </p>
                 </div>
               </div>
-              <span className="rounded-full bg-violet-200 px-3 py-1 text-xs font-bold text-violet-900">
-                {openJobs.length} Available Request{openJobs.length > 1 ? 's' : ''}
+              <span className="rounded-full bg-violet-200 px-3.5 py-1 text-xs font-bold text-violet-900 animate-pulse">
+                {openJobs.length} Live Order{openJobs.length > 1 ? 's' : ''} Available
               </span>
             </div>
 
             <div className="space-y-4 pt-2">
               {openJobs.map((job) => (
-                <div key={job.id} className="rounded-2xl border border-violet-200 bg-white p-5 shadow-sm space-y-4">
+                <div
+                  key={job.id}
+                  className="rounded-2xl border-2 border-violet-200 bg-white p-5 shadow-md space-y-4 transition hover:border-violet-400"
+                >
                   <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
                     <div>
-                      <span className="rounded-md bg-violet-100 px-2 py-0.5 text-[11px] font-bold text-violet-800">
-                        {job.category?.name || 'Home Service'}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-md bg-violet-100 px-2.5 py-0.5 text-xs font-bold text-violet-800">
+                          {job.category?.name || 'Home Service'}
+                        </span>
+                        <span className="text-[11px] font-mono text-slate-400">#{job.id.slice(-6)}</span>
+                      </div>
                       <h3 className="text-base font-bold text-slate-900 mt-1">
                         Service Order from {job.customer?.name || 'Customer'}
                       </h3>
-                      <p className="text-xs text-slate-500 mt-0.5">📍 Address: {job.address}</p>
+                      <p className="text-xs text-slate-600 mt-0.5 flex items-center gap-1">
+                        <span>📍</span> <span className="font-medium">{job.address}</span>
+                      </p>
                       {job.scheduledAt && (
                         <p className="text-xs text-slate-600 mt-0.5 font-medium">
                           📅 Scheduled: {new Date(job.scheduledAt).toLocaleString()}
@@ -217,17 +386,18 @@ export default function ProviderDashboard() {
                       )}
                     </div>
                     <div className="text-right">
-                      <p className="text-lg font-bold text-primary">₹500 / hr</p>
-                      <p className="text-[11px] text-slate-400">Est. Payout</p>
+                      <p className="text-xl font-extrabold text-emerald-600">₹500 / hr</p>
+                      <p className="text-[11px] text-slate-400">Estimated Payout</p>
                     </div>
                   </div>
+
                   <div className="flex gap-3 border-t border-slate-100 pt-3">
                     <button
                       onClick={() => advanceMutation.mutate({ endpoint: 'accept', bookingId: job.id })}
                       disabled={advanceMutation.isPending}
-                      className="flex-1 rounded-xl bg-violet-600 py-3 text-xs font-bold text-white shadow-sm transition hover:bg-violet-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                      className="flex-1 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 py-3.5 text-xs font-bold text-white shadow-md transition hover:from-violet-700 hover:to-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2"
                     >
-                      🛵 Accept & Pick Up This Job
+                      <span>🛵 Accept & Claim This Job (First-Come)</span>
                     </button>
                   </div>
                 </div>
@@ -236,7 +406,7 @@ export default function ProviderDashboard() {
           </section>
         )}
 
-        {/* 1. DIRECT INCOMING ORDERS SECTION (assigned to this provider) */}
+        {/* 1. DIRECT INCOMING ORDERS SECTION (Assigned directly to this provider) */}
         {requestedOrders.length > 0 && (
           <section className="rounded-3xl border-2 border-amber-300 bg-amber-50/50 p-6 shadow-md space-y-4">
             <div className="flex items-center justify-between">
@@ -282,7 +452,6 @@ export default function ProviderDashboard() {
                     </div>
                   </div>
 
-                  {/* Accept / Decline Action Controls */}
                   <div className="flex gap-3 border-t border-slate-100 pt-4">
                     <button
                       onClick={() => advanceMutation.mutate({ endpoint: 'accept', bookingId: order.id })}
@@ -305,73 +474,54 @@ export default function ProviderDashboard() {
           </section>
         )}
 
-        {/* Dispatch Listener status when no active requests */}
-        {openJobs.length === 0 && requestedOrders.length === 0 && (
-          <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <span className="relative flex h-3 w-3">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
-              </span>
-              <div>
-                <p className="text-xs font-bold text-slate-800">Dispatch Radar Active</p>
-                <p className="text-[11px] text-slate-500">
-                  Listening for new customer service requests nearby. When a customer books or posts a job, it will pop up here instantly.
-                </p>
-              </div>
-            </div>
-            <span className="rounded-full bg-emerald-50 px-3 py-1 text-[10px] font-bold text-emerald-700 border border-emerald-200">
-              Live Sync
-            </span>
-          </section>
-        )}
-
-        {/* 2. ACTIVE ORDERS IN-PROGRESS (SWIGGY DRIVER PIPELINE) */}
+        {/* 2. ACTIVE IN-PROGRESS DISPATCHES (ACCEPTED, EN_ROUTE, IN_PROGRESS) */}
         {activeJobs.length > 0 && (
-          <section className="rounded-3xl border border-teal-100 bg-white p-6 shadow-sm space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <section className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm space-y-4">
+            <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-bold text-slate-900">Active Jobs in Progress</h2>
-                <p className="text-xs text-slate-500">Advance order stages as you travel and complete the repair</p>
+                <h2 className="text-lg font-bold text-slate-900">Active Live Dispatches ({activeJobs.length})</h2>
+                <p className="text-xs text-slate-500">Live order progress controls — advance stages as you complete steps</p>
               </div>
             </div>
 
             <div className="space-y-4">
               {activeJobs.map((job) => (
-                <div key={job.id} className="rounded-2xl border border-slate-200 p-5 space-y-4">
-                  <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+                <div key={job.id} className="rounded-2xl border-2 border-teal-200 bg-teal-50/20 p-5 space-y-4">
+                  <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="font-bold text-slate-900 text-base">
-                          {job.category?.name || 'Service Order'}
+                        <span className="rounded-md bg-teal-100 px-2 py-0.5 text-[11px] font-bold text-teal-800">
+                          {job.category?.name || 'Service'}
                         </span>
-                        <span className="rounded-full bg-teal-50 px-2.5 py-0.5 text-xs font-bold text-primary border border-teal-200">
-                          {job.status.replace('_', ' ')}
+                        <span className="rounded-md bg-slate-900 px-2 py-0.5 text-[10px] font-bold text-white uppercase">
+                          {job.status}
                         </span>
                       </div>
-                      <p className="text-xs text-slate-500 mt-1">📍 {job.address}</p>
-                      <p className="text-xs font-medium text-slate-700 mt-0.5">
-                        Client: {job.customer?.name || 'Customer'}
-                      </p>
+                      <h3 className="text-base font-bold text-slate-900 mt-1">
+                        Customer: {job.customer?.name || 'Client'} ({job.customer?.phone || 'No phone'})
+                      </h3>
+                      <p className="text-xs text-slate-600 mt-0.5 font-medium">📍 Service Location: {job.address}</p>
                     </div>
 
-                    <Link
-                      to={`/track/${job.id}`}
-                      className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 text-center"
-                    >
-                      Open Live GPS Track →
-                    </Link>
+                    <div className="flex gap-2">
+                      <Link
+                        to={`/track/${job.id}`}
+                        className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+                      >
+                        🗺️ Open Live Map
+                      </Link>
+                    </div>
                   </div>
 
-                  {/* Stage-by-Stage Buttons */}
-                  <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+                  {/* Stage Advance Buttons */}
+                  <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-200/60">
                     {job.status === 'ACCEPTED' && (
                       <button
                         onClick={() => advanceMutation.mutate({ endpoint: 'en-route', bookingId: job.id })}
                         disabled={advanceMutation.isPending}
-                        className="flex-1 rounded-xl bg-violet-600 py-2.5 text-xs font-bold text-white transition hover:bg-violet-700"
+                        className="flex-1 rounded-xl bg-sky-600 py-3 text-xs font-bold text-white shadow-sm transition hover:bg-sky-700 disabled:opacity-50 flex items-center justify-center gap-2"
                       >
-                        🚗 Start Trip / En Route to Customer
+                        🚗 Start Trip / En Route
                       </button>
                     )}
 
@@ -379,9 +529,9 @@ export default function ProviderDashboard() {
                       <button
                         onClick={() => advanceMutation.mutate({ endpoint: 'in-progress', bookingId: job.id })}
                         disabled={advanceMutation.isPending}
-                        className="flex-1 rounded-xl bg-orange-600 py-2.5 text-xs font-bold text-white transition hover:bg-orange-700"
+                        className="flex-1 rounded-xl bg-amber-600 py-3 text-xs font-bold text-white shadow-sm transition hover:bg-amber-700 disabled:opacity-50 flex items-center justify-center gap-2"
                       >
-                        📍 Arrived at Customer / Start Work
+                        📍 Arrived at Customer Location (Start Service)
                       </button>
                     )}
 
@@ -389,9 +539,9 @@ export default function ProviderDashboard() {
                       <button
                         onClick={() => advanceMutation.mutate({ endpoint: 'complete', bookingId: job.id })}
                         disabled={advanceMutation.isPending}
-                        className="flex-1 rounded-xl bg-emerald-600 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-700"
+                        className="flex-1 rounded-xl bg-emerald-600 py-3 text-xs font-bold text-white shadow-sm transition hover:bg-emerald-700 disabled:opacity-50 flex items-center justify-center gap-2"
                       >
-                        ✅ Work Done / Complete Order
+                        ✅ Complete Order & Collect Payment
                       </button>
                     )}
                   </div>
@@ -401,32 +551,37 @@ export default function ProviderDashboard() {
           </section>
         )}
 
-        {/* 3. ALL JOB HISTORY LIST */}
-        <section className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-            <div>
-              <h2 className="text-base font-bold text-slate-900">All Completed & Past Orders</h2>
-              <p className="text-xs text-slate-500">Historical records of finished customer jobs</p>
-            </div>
-            <Link to="/history" className="text-xs font-semibold text-primary hover:underline">
-              View All History
-            </Link>
+        {/* 3. Empty State when nothing is pending */}
+        {openJobs.length === 0 && requestedOrders.length === 0 && activeJobs.length === 0 && (
+          <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-12 text-center space-y-3">
+            <span className="text-4xl">📡</span>
+            <h3 className="text-base font-bold text-slate-800">Dispatch Radar Active</h3>
+            <p className="text-xs text-slate-500 max-w-md mx-auto">
+              Listening for new customer service requests nearby. When a customer books or posts a job, it will pop up here instantly via live push!
+            </p>
           </div>
+        )}
 
-          {isLoading ? (
-            <p className="text-xs text-slate-500">Loading order records…</p>
-          ) : allBookings.length === 0 ? (
-            <div className="rounded-xl bg-slate-50 p-8 text-center text-xs text-slate-500">
-              No orders received yet. Make sure your status is toggled Online to receive nearby requests!
+        {/* 4. Completed Order History */}
+        {completedJobs.length > 0 && (
+          <section className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">All Completed & Past Orders</h2>
+                <p className="text-xs text-slate-500">Historical records of finished customer jobs</p>
+              </div>
+              <Link to="/history" className="text-xs font-bold text-primary hover:underline">
+                View All History
+              </Link>
             </div>
-          ) : (
+
             <div className="space-y-3">
-              {allBookings.map((booking) => (
-                <BookingCard key={booking.id} booking={booking} isProviderView />
+              {completedJobs.slice(0, 5).map((booking) => (
+                <BookingCard key={booking.id} booking={booking} isProviderView={true} />
               ))}
             </div>
-          )}
-        </section>
+          </section>
+        )}
       </div>
     </div>
   );
