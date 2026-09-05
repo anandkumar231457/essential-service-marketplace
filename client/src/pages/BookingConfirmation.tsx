@@ -9,7 +9,7 @@ export default function BookingConfirmation() {
   const { data } = useQuery({
     queryKey: ['booking', bookingId],
     enabled: Boolean(bookingId),
-    refetchInterval: 5000, // Poll every 5s until provider accepts
+    refetchInterval: 10000, // Poll every 10s until provider accepts
     queryFn: () =>
       api.get<{
         booking: Booking & {

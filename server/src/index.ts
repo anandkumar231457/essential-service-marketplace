@@ -50,23 +50,25 @@ app.use(
 app.use(express.json());
 
 // ── Rate limiting ────────────────────────────────────────────────────────
-// Generous API limiter: 1000 requests / 15 min / IP to prevent blocking during active usage & polling.
+// Generous API limiter: 3000 requests / 15 min / IP.
+// Our polling-heavy frontend (open-jobs 3s, bookings 5s, pings) needs headroom.
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 1000,
+  limit: 3000,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' },
 });
 
-// Auth limiter: 200 attempts / 15 min / IP.
+// Auth limiter: 300 attempts / 15 min / IP.
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 200,
+  limit: 300,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many auth attempts, please try again later.' },
 });
+
 
 // Apply the general limiter to all /api routes.
 app.use('/api', apiLimiter);

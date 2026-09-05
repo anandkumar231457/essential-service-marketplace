@@ -255,7 +255,7 @@ export default function ProviderDashboard() {
   const { data } = useQuery({
     queryKey: ['my-bookings'],
     queryFn: () => api.get<{ bookings: HistoryBooking[] }>('/api/bookings/my'),
-    refetchInterval: 5000,
+    refetchInterval: 10000, // 10s — socket events handle instant updates
   });
 
   const { data: openJobsData } = useQuery({
@@ -264,8 +264,9 @@ export default function ProviderDashboard() {
       const params = liveLocation ? `?lat=${liveLocation.lat}&lng=${liveLocation.lng}` : '';
       return api.get<{ bookings: (HistoryBooking & { distanceKm?: number })[] }>(`/api/bookings/open${params}`);
     },
-    refetchInterval: 3000,
+    refetchInterval: 8000, // 8s — socket job:broadcast handles instant new-job alerts
   });
+
 
   const allBookings = data?.bookings ?? [];
   const requestedOrders = allBookings.filter((b) => b.status === 'REQUESTED');
