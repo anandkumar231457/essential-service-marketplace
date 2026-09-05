@@ -593,44 +593,8 @@ export default function ProviderDashboard() {
           </section>
         )}
 
-        {/* 1. Direct Requested Orders Assigned to You */}
-        {requestedOrders.length > 0 && (
-          <section className="rounded-3xl border border-amber-200 bg-white p-6 shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-base font-bold text-slate-900">Direct Customer Bookings</h2>
-                <p className="text-xs text-slate-500">Customers selected you directly for these jobs.</p>
-              </div>
-              <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-800">
-                {requestedOrders.length} Direct Request{requestedOrders.length > 1 ? 's' : ''}
-              </span>
-            </div>
 
-            <div className="grid gap-4">
-              {requestedOrders.map((booking) => (
-                <div key={booking.id} className="rounded-2xl border border-slate-100 p-4 space-y-3">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-700">
-                        {booking.category?.name}
-                      </span>
-                      <h3 className="font-bold text-sm text-slate-900 mt-1">{booking.customer?.name}</h3>
-                      <p className="text-xs text-slate-500">📍 {booking.address}</p>
-                    </div>
-                  </div>
-                  <div className="flex gap-2 pt-2 border-t border-slate-100">
-                    <button
-                      onClick={() => advanceMutation.mutate({ endpoint: 'accept', bookingId: booking.id })}
-                      className="rounded-xl bg-teal-600 px-4 py-2 text-xs font-bold text-white hover:bg-teal-700"
-                    >
-                      Accept Booking
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
+
 
         {/* 2. Active Orders in Progress */}
         {activeJobs.length > 0 && (
