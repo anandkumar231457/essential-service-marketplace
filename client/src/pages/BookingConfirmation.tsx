@@ -1,10 +1,26 @@
-import { useQuery } from '@tanstack/react-query';
-import { Link, useParams } from 'react-router-dom';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Link, useParams, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import type { Booking } from '../types';
 
 export default function BookingConfirmation() {
   const { bookingId } = useParams();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  const cancelMutation = useMutation({
+    mutationFn: () => api.post('/api/bookings/cancel', { bookingId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['booking', bookingId] });
+      queryClient.invalidateQueries({ queryKey: ['my-bookings'] });
+      queryClient.invalidateQueries({ queryKey: ['open-jobs'] });
+      alert('Booking cancelled successfully.');
+      navigate('/history');
+    },
+    onError: (err: any) => {
+      alert(err.message || 'Failed to cancel booking');
+    },
+  });
 
   const { data } = useQuery({
     queryKey: ['booking', bookingId],
@@ -18,6 +34,7 @@ export default function BookingConfirmation() {
         };
       }>(`/api/bookings/${bookingId}`),
   });
+
 
   const booking = data?.booking;
   const bookingCode = booking ? `FIN-${booking.id.slice(-6).toUpperCase()}` : '…';
@@ -215,12 +232,18 @@ export default function BookingConfirmation() {
               <div className="text-center pt-1">
                 <button
                   type="button"
-                  onClick={() => alert('Booking cancellation policy')}
-                  className="text-xs font-semibold text-rose-600 hover:underline"
+                  onClick={() => {
+                    if (window.confirm('Are you sure you want to cancel this booking request?')) {
+                      cancelMutation.mutate();
+                    }
+                  }}
+                  disabled={cancelMutation.isPending}
+                  className="text-xs font-semibold text-rose-600 hover:underline disabled:opacity-50"
                 >
-                  Cancel Booking
+                  {cancelMutation.isPending ? 'Cancelling…' : 'Cancel Booking'}
                 </button>
               </div>
+
             </div>
           </section>
         </div>

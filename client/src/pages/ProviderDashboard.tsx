@@ -70,16 +70,25 @@ export default function ProviderDashboard() {
   const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Refs so the interval/callback always has latest values without causing re-renders
   const liveLocationRef = useRef<{ lat: number; lng: number; accuracy?: number } | null>(null);
+  const lastSyncedCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
+  const lastSyncTimeRef = useRef<number>(0);
   const availableRef = useRef<boolean>(true);
   useEffect(() => { availableRef.current = available; }, [available]);
 
-  // 1. Send Presence + GPS Coordinates to Backend
+  // 1. Send Presence + GPS Coordinates to Backend (Throttled & Memoized)
   const syncLocation = useCallback(
     async (coords: { lat: number; lng: number; accuracy?: number }, isOnline: boolean) => {
       if (!user?.id) return;
       try {
         liveLocationRef.current = coords;
-        setLiveLocation(coords);
+        // Only update state if position shifted by more than 15 meters to prevent continuous re-renders
+        setLiveLocation((prev) => {
+          if (prev) {
+            const dist = calculateDistanceKm(prev.lat, prev.lng, coords.lat, coords.lng);
+            if (dist < 0.015) return prev; // Do NOT trigger React re-render
+          }
+          return coords;
+        });
         setLastGpsSync(new Date());
 
         // HTTP ping to persist to database
@@ -107,7 +116,7 @@ export default function ProviderDashboard() {
     [user]
   );
 
-  // 2. Active GPS Watcher - start once, use refs inside callbacks to avoid deps restarts
+  // 2. Active GPS Watcher - throttled so micro-GPS jitter does not cause continuous re-rendering
   const startGpsTracking = useCallback(() => {
     if (!navigator.geolocation) {
       setGpsStatus('denied');
@@ -116,15 +125,16 @@ export default function ProviderDashboard() {
 
     setGpsStatus('searching');
 
-    // Clear any previous watcher before creating a new one
     if (watchIdRef.current !== null) {
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
     }
 
-    // Immediate one-shot fix to show location fast
+    // Immediate one-shot fix
     navigator.geolocation.getCurrentPosition(
       (pos) => {
+        lastSyncedCoordsRef.current = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        lastSyncTimeRef.current = Date.now();
         const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: Math.round(pos.coords.accuracy) };
         setGpsStatus('tracking');
         syncLocation(coords, availableRef.current);
@@ -134,34 +144,47 @@ export default function ProviderDashboard() {
         const fallback = { lat: 12.9352, lng: 77.6245, accuracy: 50 };
         syncLocation(fallback, availableRef.current);
       },
-      { timeout: 8000, enableHighAccuracy: true, maximumAge: 0 }
+      { timeout: 8000, enableHighAccuracy: true, maximumAge: 10000 }
     );
 
-    // Continuous watcher - fires whenever device moves
+    // Continuous watcher - throttled to only fire if moved > 25 meters or > 25s elapsed
     watchIdRef.current = navigator.geolocation.watchPosition(
       (pos) => {
-        const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: Math.round(pos.coords.accuracy) };
-        setGpsStatus('tracking');
-        syncLocation(coords, availableRef.current);
+        const now = Date.now();
+        const lastCoords = lastSyncedCoordsRef.current;
+        const lastTime = lastSyncTimeRef.current;
+        let movedKm = 0;
+        if (lastCoords) {
+          movedKm = calculateDistanceKm(lastCoords.lat, lastCoords.lng, pos.coords.latitude, pos.coords.longitude);
+        }
+
+        const shouldSync = !lastCoords || movedKm >= 0.025 || (now - lastTime) >= 25000;
+        if (shouldSync) {
+          lastSyncedCoordsRef.current = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          lastSyncTimeRef.current = now;
+          const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: Math.round(pos.coords.accuracy) };
+          setGpsStatus('tracking');
+          syncLocation(coords, availableRef.current);
+        }
       },
       (err) => {
         console.warn('GPS watch warning:', err.message);
       },
-      { timeout: 15000, enableHighAccuracy: true, maximumAge: 5000 }
+      { timeout: 15000, enableHighAccuracy: true, maximumAge: 10000 }
     );
   }, [syncLocation]);
 
-  // 3. Presence Lifecycle: start GPS once on mount only (not on every re-render)
+  // 3. Presence Lifecycle: start GPS once on mount only
   useEffect(() => {
     startGpsTracking();
 
-    // Background ping every 20s using refs - no dependency on state
+    // Calm background ping every 30 seconds
     pingIntervalRef.current = setInterval(() => {
       const loc = liveLocationRef.current;
       if (loc) {
         syncLocation(loc, availableRef.current);
       }
-    }, 20000);
+    }, 30000);
 
     return () => {
       if (watchIdRef.current !== null) {
@@ -173,9 +196,9 @@ export default function ProviderDashboard() {
         pingIntervalRef.current = null;
       }
     };
-    // Run only once on mount — refs keep values fresh inside
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
 
   // 4. Socket.io Real-Time Push — TRUE Swiggy/Zomato approach:
   //    When job:broadcast arrives, inject the job DIRECTLY into the cache.
@@ -333,6 +356,36 @@ export default function ProviderDashboard() {
       setActionSuccess('');
     },
   });
+
+  // Clear & cancel all open test jobs
+  const clearAllMutation = useMutation({
+    mutationFn: () => api.post<{ success: boolean; cancelledCount: number }>('/api/bookings/cancel-all-open'),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['open-jobs'], { bookings: [] });
+      queryClient.invalidateQueries({ queryKey: ['open-jobs'] });
+      setActionSuccess(`✓ Cancelled and cleared ${data?.cancelledCount ?? 'all'} old test job requests!`);
+      setTimeout(() => setActionSuccess(''), 4000);
+    },
+    onError: (err: any) => {
+      setActionError(err.message || 'Failed to clear jobs');
+    },
+  });
+
+  // Cancel / dismiss individual job
+  const cancelJobMutation = useMutation({
+    mutationFn: (bookingId: string) => api.post('/api/bookings/cancel', { bookingId }),
+    onSuccess: (_, bookingId) => {
+      queryClient.setQueryData<{ bookings: any[] }>(['open-jobs'], (old) => {
+        if (!old) return old;
+        return { ...old, bookings: old.bookings.filter((b) => b.id !== bookingId) };
+      });
+      queryClient.invalidateQueries({ queryKey: ['open-jobs'] });
+      setActionSuccess('Order cancelled & removed');
+      setTimeout(() => setActionSuccess(''), 3000);
+    },
+    onError: (err: any) => setActionError(err.message || 'Failed to cancel job'),
+  });
+
 
   const toggleAvailability = async () => {
     const next = !available;
@@ -514,9 +567,22 @@ export default function ProviderDashboard() {
                   </p>
                 </div>
               </div>
-              <span className="rounded-full bg-teal-100 px-3.5 py-1 text-xs font-bold text-teal-900 self-start sm:self-center">
-                {openJobs.length} Available Order{openJobs.length > 1 ? 's' : ''}
-              </span>
+              <div className="flex items-center gap-2 self-start sm:self-center">
+                <button
+                  onClick={() => {
+                    if (window.confirm('Are you sure you want to cancel and clear all open test orders?')) {
+                      clearAllMutation.mutate();
+                    }
+                  }}
+                  disabled={clearAllMutation.isPending}
+                  className="rounded-xl border border-rose-300 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 text-xs font-bold text-rose-700 transition flex items-center gap-1 shadow-2xs"
+                >
+                  {clearAllMutation.isPending ? 'Clearing…' : '🗑️ Clear All Old Orders'}
+                </button>
+                <span className="rounded-full bg-teal-100 px-3.5 py-1 text-xs font-bold text-teal-900">
+                  {openJobs.length} Available Order{openJobs.length > 1 ? 's' : ''}
+                </span>
+              </div>
             </div>
 
             <div className="space-y-4 pt-2">
@@ -570,13 +636,25 @@ export default function ProviderDashboard() {
                     </div>
                   </div>
 
-                  <div className="flex gap-3 border-t border-slate-100 pt-3">
+                  <div className="flex gap-2.5 border-t border-slate-100 pt-3">
                     <button
                       onClick={() => advanceMutation.mutate({ endpoint: 'accept', bookingId: job.id })}
                       disabled={advanceMutation.isPending}
-                      className="w-full rounded-xl bg-teal-600 py-3 text-xs font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                      className="flex-1 rounded-xl bg-teal-600 py-3 text-xs font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:opacity-50 flex items-center justify-center gap-2"
                     >
                       <span>🛵</span> Accept & Claim This Job
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (window.confirm('Cancel this job order?')) {
+                          cancelJobMutation.mutate(job.id);
+                        }
+                      }}
+                      disabled={cancelJobMutation.isPending}
+                      className="rounded-xl border border-slate-200 hover:border-rose-300 bg-white hover:bg-rose-50 px-3.5 py-3 text-xs font-semibold text-slate-500 hover:text-rose-600 transition"
+                      title="Cancel this order"
+                    >
+                      ✕ Cancel
                     </button>
                   </div>
                 </div>

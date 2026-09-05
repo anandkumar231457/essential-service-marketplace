@@ -242,6 +242,19 @@ export default function Track() {
     }
   };
 
+  const cancelBooking = async () => {
+    if (!bookingId) return;
+    if (!window.confirm('Are you sure you want to cancel this booking request?')) return;
+    try {
+      await api.post('/api/bookings/cancel', { bookingId });
+      setStatusMessage('✓ Booking request has been cancelled.');
+      await fetchBooking();
+      setTimeout(() => setStatusMessage(''), 4000);
+    } catch (err: any) {
+      setStatusMessage(`⚠️ ${err.message || 'Failed to cancel'}`);
+    }
+  };
+
   const currentStepIdx = booking ? STEPS.indexOf(booking.status) : 0;
   const isTerminated = booking ? ['CANCELLED', 'REJECTED'].includes(booking.status) : false;
   const isProvider = user?.role === 'PROVIDER' || (booking?.providerId && booking.providerId === user?.id);
@@ -320,12 +333,20 @@ export default function Track() {
                       </p>
                     </div>
                   </div>
-                  <button
-                    onClick={retryBroadcast}
-                    className="rounded-xl border border-teal-300 bg-white px-3.5 py-1.5 text-xs font-bold text-teal-800 hover:bg-teal-100 shadow-sm self-start sm:self-center"
-                  >
-                    🔄 Widen & Re-broadcast
-                  </button>
+                  <div className="flex items-center gap-2 self-start sm:self-center">
+                    <button
+                      onClick={retryBroadcast}
+                      className="rounded-xl border border-teal-300 bg-white px-3.5 py-1.5 text-xs font-bold text-teal-800 hover:bg-teal-100 shadow-xs"
+                    >
+                      🔄 Widen Search
+                    </button>
+                    <button
+                      onClick={cancelBooking}
+                      className="rounded-xl border border-rose-300 bg-rose-50 hover:bg-rose-100 px-3.5 py-1.5 text-xs font-bold text-rose-700 shadow-xs transition"
+                    >
+                      ✕ Cancel Order
+                    </button>
+                  </div>
                 </div>
 
                 {/* Detected nearby specialists badge list */}

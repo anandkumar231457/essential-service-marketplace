@@ -341,3 +341,32 @@ export async function cancel(req: Request, res: Response) {
     return res.status(500).json({ error: e.message });
   }
 }
+
+/** POST /api/bookings/cancel-all-open — cancels all unassigned REQUESTED jobs to clear test backlogs. */
+export async function cancelAllOpen(_req: Request, res: Response) {
+
+  const user = res.locals.user;
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+  try {
+    const result = await prisma.booking.updateMany({
+      where: {
+        status: 'REQUESTED',
+        providerId: null,
+      },
+      data: {
+        status: 'CANCELLED',
+      },
+    });
+
+    const io = (await import('../lib/socketEmitter.js')).getSocketIO();
+    if (io) {
+      io.emit('booking:status-changed', { cleared: true, count: result.count });
+    }
+
+    return res.json({ success: true, cancelledCount: result.count });
+  } catch (e: any) {
+    return res.status(500).json({ error: e.message });
+  }
+}
+

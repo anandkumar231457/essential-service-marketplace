@@ -19,6 +19,7 @@ import {
   inProgress as inProgressBooking,
   complete as completeBooking,
   cancel as cancelBooking,
+  cancelAllOpen as cancelAllOpenBookings,
 } from './server/bookingLifecycle.js';
 import { create as createReview } from './server/reviews.js';
 import { setSocketIO, setProviderPresence, removeProviderBySocketId, setProviderOffline, haversineKm } from './lib/socketEmitter.js';
@@ -424,6 +425,7 @@ app.post('/api/bookings/en-route', requireAuth, enRouteBooking);
 app.post('/api/bookings/in-progress', requireAuth, inProgressBooking);
 app.post('/api/bookings/complete', requireAuth, completeBooking);
 app.post('/api/bookings/cancel', requireAuth, cancelBooking);
+app.post('/api/bookings/cancel-all-open', requireAuth, cancelAllOpenBookings);
 
 // Reviews
 app.post('/api/bookings/:bookingId/reviews', requireAuth, createReview);
