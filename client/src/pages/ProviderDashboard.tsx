@@ -177,63 +177,77 @@ export default function ProviderDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 4. Socket.io Real-Time Push Listener for Zomato/Swiggy Instant Dispatch
+  // 4. Socket.io Real-Time Push — TRUE Swiggy/Zomato approach:
+  //    When job:broadcast arrives, inject the job DIRECTLY into the cache.
+  //    No HTTP request needed → works even if rate limit was hit.
   useEffect(() => {
     const socket = getSocket();
 
     const handleConnect = () => {
       if (user?.id) {
         socket.emit('set-provider-id', user.id);
-        if (available && liveLocation) {
-          socket.emit('provider:online', { providerId: user.id, lat: liveLocation.lat, lng: liveLocation.lng });
+        // Always re-register as online when socket reconnects
+        const loc = liveLocationRef.current;
+        if (availableRef.current && loc) {
+          socket.emit('provider:online', { providerId: user.id, lat: loc.lat, lng: loc.lng });
         }
       }
     };
 
     const handleJobBroadcast = (data: { booking: HistoryBooking; radiusKm?: number; distanceKm?: number }) => {
+      if (!data?.booking?.id) return;
+
       // Play audio chime
       playOrderChime();
 
-      // Compare GPS distance
+      // Calculate distance client-side
       let dist = data.distanceKm;
-      if (!dist && liveLocation && data.booking?.lat && data.booking?.lng) {
-        dist = calculateDistanceKm(liveLocation.lat, liveLocation.lng, data.booking.lat, data.booking.lng);
+      const loc = liveLocationRef.current;
+      if (!dist && loc && data.booking?.lat && data.booking?.lng) {
+        dist = calculateDistanceKm(loc.lat, loc.lng, data.booking.lat, data.booking.lng);
       }
 
-      // Invalidate queries so open jobs list updates instantly
-      queryClient.invalidateQueries({ queryKey: ['open-jobs'] });
-      queryClient.invalidateQueries({ queryKey: ['my-bookings'] });
+      // ── INJECT directly into open-jobs cache (no HTTP request needed) ──
+      queryClient.setQueryData<{ bookings: (HistoryBooking & { distanceKm?: number })[] }>(
+        ['open-jobs'],
+        (old) => {
+          const existing = old?.bookings ?? [];
+          // Avoid duplicates
+          if (existing.some((b) => b.id === data.booking.id)) return old ?? { bookings: existing };
+          return { bookings: [{ ...data.booking, distanceKm: dist }, ...existing] };
+        }
+      );
 
-      // Show alert banner with exact distance
+      // Show alert banner
       setRealtimeAlert({
         bookingId: data.booking.id,
-        message: `🔔 New Order Dispatch: ${data.booking.category?.name || 'Service'} requested!`,
+        message: `New Order: ${data.booking.category?.name || 'Service'} requested!`,
         category: data.booking.category?.name,
         distanceKm: dist,
         address: data.booking.address,
       });
 
-      // Auto dismiss after 12 seconds
-      setTimeout(() => setRealtimeAlert(null), 12000);
+      // Auto dismiss after 15 seconds
+      setTimeout(() => setRealtimeAlert(null), 15000);
     };
 
-    const handleJobClaimed = (data: { bookingId: string; assignedTo: string; providerName?: string }) => {
-      // If someone else claimed it, remove it immediately from our open jobs
-      if (data.assignedTo !== user?.id) {
-        queryClient.setQueryData<{ bookings: HistoryBooking[] }>(['open-jobs'], (old) => {
+    const handleJobClaimed = (data: { bookingId: string; assignedTo: string }) => {
+      // Remove the job from open list immediately — whoever claimed it, it's gone
+      queryClient.setQueryData<{ bookings: HistoryBooking[] }>(
+        ['open-jobs'],
+        (old) => {
           if (!old) return old;
-          return {
-            ...old,
-            bookings: old.bookings.filter((b) => b.id !== data.bookingId),
-          };
-        });
-        queryClient.invalidateQueries({ queryKey: ['open-jobs'] });
+          return { ...old, bookings: old.bookings.filter((b) => b.id !== data.bookingId) };
+        }
+      );
+      // If WE claimed it, refresh our active jobs
+      if (data.assignedTo === user?.id) {
+        queryClient.invalidateQueries({ queryKey: ['my-bookings'] });
       }
     };
 
     const handleBookingStatusChanged = () => {
       queryClient.invalidateQueries({ queryKey: ['my-bookings'] });
-      queryClient.invalidateQueries({ queryKey: ['open-jobs'] });
     };
 
     socket.on('connect', handleConnect);
@@ -249,38 +263,43 @@ export default function ProviderDashboard() {
       socket.off('job:claimed', handleJobClaimed);
       socket.off('booking:status-changed', handleBookingStatusChanged);
     };
-  }, [user, available, queryClient, liveLocation]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, queryClient]);
 
-  // 5. Data queries (with fast background refresh & sending live GPS)
+  // 5. Data queries — stable queryKey (no location in key, avoids cache-miss on GPS lock)
   const { data } = useQuery({
     queryKey: ['my-bookings'],
     queryFn: () => api.get<{ bookings: HistoryBooking[] }>('/api/bookings/my'),
-    refetchInterval: 10000, // 10s — socket events handle instant updates
+    refetchInterval: 15000, // 15s fallback — socket handles instant updates
   });
 
-  const { data: openJobsData } = useQuery({
-    queryKey: ['open-jobs', liveLocation?.lat, liveLocation?.lng],
+  const { data: openJobsData, isError: openJobsError } = useQuery({
+    queryKey: ['open-jobs'], // STABLE key — no location in it
     queryFn: () => {
-      const params = liveLocation ? `?lat=${liveLocation.lat}&lng=${liveLocation.lng}` : '';
+      // Include GPS coords in URL for server-side distance sorting, but NOT in the key
+      const loc = liveLocationRef.current;
+      const params = loc ? `?lat=${loc.lat}&lng=${loc.lng}` : '';
       return api.get<{ bookings: (HistoryBooking & { distanceKm?: number })[] }>(`/api/bookings/open${params}`);
     },
-    refetchInterval: 8000, // 8s — socket job:broadcast handles instant new-job alerts
+    refetchInterval: 15000, // 15s fallback — socket:job:broadcast injects jobs instantly
+    staleTime: 10000,
   });
 
-
   const allBookings = data?.bookings ?? [];
-  const requestedOrders = allBookings.filter((b) => b.status === 'REQUESTED');
   const activeJobs = allBookings.filter((b) => ['ACCEPTED', 'EN_ROUTE', 'IN_PROGRESS'].includes(b.status));
   const completedJobs = allBookings.filter((b) => b.status === 'COMPLETED');
 
   // Compute live distances for open jobs relative to provider's current GPS
   const openJobs = (openJobsData?.bookings ?? []).map((job) => {
+    const loc = liveLocationRef.current;
     let dist = job.distanceKm;
-    if (dist === undefined && liveLocation && job.lat && job.lng) {
-      dist = calculateDistanceKm(liveLocation.lat, liveLocation.lng, job.lat, job.lng);
+    if (dist === undefined && loc && job.lat && job.lng) {
+      dist = calculateDistanceKm(loc.lat, loc.lng, job.lat, job.lng);
     }
     return { ...job, computedDistanceKm: dist };
   }).sort((a, b) => (a.computedDistanceKm ?? 999) - (b.computedDistanceKm ?? 999));
+
+
 
   // 6. Mutation for advancing order lifecycle with atomic first-accept handling
   const advanceMutation = useMutation({
@@ -449,13 +468,21 @@ export default function ProviderDashboard() {
           </div>
         )}
 
+        {/* API error indicator — shows if open-jobs HTTP call failed */}
+        {openJobsError && (
+          <div className="rounded-2xl bg-amber-50 border border-amber-300 p-3 text-xs font-bold text-amber-800 flex items-center gap-2">
+            ⚠️ Could not fetch jobs from server — waiting for socket updates. Try refreshing if this persists.
+          </div>
+        )}
+
         {/* Stats Cards */}
         <div className="grid gap-4 sm:grid-cols-3">
           <div className="rounded-2xl bg-amber-500 p-5 text-white shadow-sm">
             <p className="text-xs font-bold text-amber-100 uppercase tracking-wide">Available Nearby Jobs</p>
-            <p className="mt-2 text-3xl font-extrabold">{openJobs.length + requestedOrders.length}</p>
+            <p className="mt-2 text-3xl font-extrabold">{openJobs.length}</p>
             <p className="mt-1 text-xs text-amber-100">Ready to accept right now</p>
           </div>
+
 
           <div className="rounded-2xl bg-slate-950 p-5 text-white shadow-sm">
             <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Active In-Progress Jobs</p>
