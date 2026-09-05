@@ -326,19 +326,19 @@ export default function ProviderDashboard() {
         <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-teal-700 uppercase tracking-wide">SPECIALIST DISPATCH RADAR</span>
+              <span className="text-xs font-bold text-teal-700 uppercase tracking-wide">SPECIALIST PORTAL</span>
               <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
                 available ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'
               }`}>
                 <span className={`h-2 w-2 rounded-full ${available ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`}></span>
-                {available ? 'Radar Active (Online)' : 'Radar Inactive (Offline)'}
+                {available ? 'Available for Bookings (Online)' : 'Currently Offline'}
               </span>
             </div>
             <h1 className="mt-1 text-2xl sm:text-3xl font-extrabold text-slate-900">
               Welcome back, {user?.name?.split(' ')[0] || 'Pro'}
             </h1>
             <p className="mt-1 text-xs text-slate-500">
-              Active GPS matches incoming customer orders within your area in real-time.
+              Receive customer service requests and manage your active jobs in real-time.
             </p>
           </div>
 
@@ -349,36 +349,34 @@ export default function ProviderDashboard() {
             }`}
           >
             <span className="text-sm">{available ? '🟢' : '⚪'}</span>
-            {available ? 'Online — Receiving Nearby Orders' : 'Go Online to Receive Orders'}
+            {available ? 'Online — Ready to Accept Orders' : 'Go Online to Receive Orders'}
           </button>
         </div>
 
-        {/* 🛰️ ACTIVE LIVE GPS RADAR BAR */}
-        <div className="rounded-2xl border border-teal-200 bg-gradient-to-r from-teal-50 via-emerald-50 to-white p-4 sm:p-5 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        {/* 📍 LIVE LOCATION & STATUS BAR */}
+        <div className="rounded-3xl border border-teal-200 bg-gradient-to-r from-teal-50 via-emerald-50 to-white p-4 sm:p-5 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-teal-600 text-white font-bold text-lg shadow-sm">
-              🛰️
+              📍
             </span>
             <div>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-bold text-slate-900 uppercase tracking-wide">
-                  Active Device GPS Tracking
+                  Service Area & Location
                 </span>
                 <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
                   gpsStatus === 'tracking' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
                 }`}>
-                  {gpsStatus === 'tracking' ? '🟢 Live GPS Active' : '⏳ Acquiring Coords'}
+                  {gpsStatus === 'tracking' ? '🟢 Live Location Active' : '⏳ Locating…'}
                 </span>
               </div>
 
               {liveLocation ? (
-                <p className="text-xs text-slate-600 mt-0.5 font-mono">
-                  Coordinates: <span className="font-semibold text-slate-900">{liveLocation.lat.toFixed(5)}, {liveLocation.lng.toFixed(5)}</span>
-                  {liveLocation.accuracy && <span className="text-slate-400"> (±{liveLocation.accuracy}m)</span>}
-                  <span className="text-slate-400 ml-2">Synced: {lastGpsSync.toLocaleTimeString()}</span>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Location active in your service radius • <span className="text-slate-400">Synced: {lastGpsSync.toLocaleTimeString()}</span>
                 </p>
               ) : (
-                <p className="text-xs text-slate-500 mt-0.5">Detecting continuous GPS location from your browser…</p>
+                <p className="text-xs text-slate-500 mt-0.5">Detecting your location to match nearby customer requests…</p>
               )}
             </div>
           </div>
@@ -387,7 +385,7 @@ export default function ProviderDashboard() {
             onClick={startGpsTracking}
             className="shrink-0 rounded-xl bg-white border border-teal-200 hover:border-teal-400 px-3.5 py-2 text-xs font-bold text-teal-800 shadow-sm transition hover:bg-teal-50 flex items-center gap-1.5 justify-center"
           >
-            🔄 Refresh GPS Location
+            🔄 Refresh Location
           </button>
         </div>
 
@@ -468,25 +466,25 @@ export default function ProviderDashboard() {
           </div>
         </div>
 
-        {/* 0. OPEN BROADCAST JOB BOARD — Zomato/Swiggy Style Instant Dispatch */}
+        {/* 0. OPEN BROADCAST JOB BOARD */}
         {openJobs.length > 0 ? (
-          <section className="rounded-3xl border-2 border-violet-400 bg-violet-50/70 p-5 sm:p-6 shadow-lg space-y-4">
+          <section className="rounded-3xl border-2 border-teal-500/40 bg-teal-50/50 p-5 sm:p-6 shadow-md space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div className="flex items-center gap-2.5">
-                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-violet-600 text-white font-bold text-lg animate-bounce">
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-teal-600 text-white font-bold text-lg">
                   🛵
                 </span>
                 <div>
                   <h2 className="text-base sm:text-lg font-bold text-slate-900">
-                    Live Dispatch Radar — Open Orders Near Your GPS
+                    Available Service Orders Near You
                   </h2>
                   <p className="text-xs text-slate-600">
-                    Calculated distance from your live device coordinates. Tap Accept to claim the job!
+                    Customer orders matching your service area. Tap Accept to claim the job!
                   </p>
                 </div>
               </div>
-              <span className="rounded-full bg-violet-200 px-3.5 py-1 text-xs font-bold text-violet-900 animate-pulse self-start sm:self-center">
-                {openJobs.length} Live Order{openJobs.length > 1 ? 's' : ''} Ready
+              <span className="rounded-full bg-teal-100 px-3.5 py-1 text-xs font-bold text-teal-900 self-start sm:self-center">
+                {openJobs.length} Available Order{openJobs.length > 1 ? 's' : ''}
               </span>
             </div>
 
@@ -494,12 +492,12 @@ export default function ProviderDashboard() {
               {openJobs.map((job) => (
                 <div
                   key={job.id}
-                  className="rounded-2xl border-2 border-violet-200 bg-white p-5 shadow-md space-y-4 transition hover:border-violet-400"
+                  className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xs space-y-4 transition hover:border-teal-400 hover:shadow-md"
                 >
                   <div className="flex flex-col sm:flex-row justify-between sm:items-start gap-3">
                     <div className="space-y-1.5">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded-md bg-violet-100 px-2.5 py-0.5 text-xs font-bold text-violet-800">
+                        <span className="rounded-md bg-teal-50 px-2.5 py-0.5 text-xs font-bold text-teal-800 border border-teal-100">
                           {job.category?.name || 'Home Service'}
                         </span>
                         {job.computedDistanceKm !== undefined && (
@@ -508,10 +506,10 @@ export default function ProviderDashboard() {
                               ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
                               : 'bg-teal-100 text-teal-800 border border-teal-200'
                           }`}>
-                            📍 {job.computedDistanceKm} km away from your GPS
+                            📍 {job.computedDistanceKm} km away
                           </span>
                         )}
-                        <span className="text-[11px] font-mono text-slate-400">#{job.id.slice(-6)}</span>
+                        <span className="text-[11px] font-mono text-slate-400">#FIN-{job.id.slice(-6).toUpperCase()}</span>
                       </div>
 
                       <h3 className="text-base font-bold text-slate-900">
@@ -536,7 +534,7 @@ export default function ProviderDashboard() {
                     </div>
 
                     <div className="text-right shrink-0">
-                      <p className="text-xl font-extrabold text-emerald-600">₹500 / hr</p>
+                      <p className="text-xl font-extrabold text-teal-600">₹500 / hr</p>
                       <p className="text-[11px] text-slate-400">Estimated Payout</p>
                     </div>
                   </div>
@@ -547,7 +545,7 @@ export default function ProviderDashboard() {
                       disabled={advanceMutation.isPending}
                       className="w-full rounded-xl bg-teal-600 py-3 text-xs font-bold text-white shadow-sm transition hover:bg-teal-700 disabled:opacity-50 flex items-center justify-center gap-2"
                     >
-                      <span>🛵</span> Accept & Claim This Job (First-Accept-Wins)
+                      <span>🛵</span> Accept & Claim This Job
                     </button>
                   </div>
                 </div>
@@ -555,11 +553,11 @@ export default function ProviderDashboard() {
             </div>
           </section>
         ) : (
-          <section className="rounded-3xl border border-slate-200 bg-white p-6 text-center space-y-2">
-            <div className="text-3xl">📡</div>
-            <h3 className="font-bold text-slate-800 text-sm">GPS Dispatch Radar is Active</h3>
+          <section className="rounded-3xl border border-slate-200 bg-white p-8 text-center space-y-2">
+            <div className="text-3xl">📋</div>
+            <h3 className="font-bold text-slate-800 text-sm">No Pending Orders Right Now</h3>
             <p className="text-xs text-slate-500 max-w-md mx-auto">
-              Scanning for new customer requests nearby. When a customer posts a job matching your GPS location, it will ring and appear here instantly!
+              Your status is active. When a customer posts a service request in your area, it will notify and appear here in real-time.
             </p>
           </section>
         )}
