@@ -350,18 +350,8 @@ app.get('/api/bookings/my', requireAuth, async (_req, res) => {
   res.json({ bookings });
 });
 
-app.get('/api/bookings/:bookingId', requireAuth, async (req, res) => {
-  const user = res.locals.user;
-  const booking = await prisma.booking.findUnique({
-    where: { id: req.params.bookingId },
-    include: { category: true, customer: { select: { name: true, phone: true } }, provider: { select: { name: true, phone: true } }, review: true, statusHistory: { orderBy: { changedAt: 'asc' } } },
-  });
-  if (!booking) return res.status(404).json({ error: 'Booking not found' });
-  if (booking.customerId !== user.userId && booking.providerId !== user.userId) return res.status(403).json({ error: 'Not authorized for this booking' });
-  return res.json({ booking });
-});
-
 // Open job board — unassigned broadcast jobs + incoming requests for this provider
+// MUST be defined BEFORE /api/bookings/:bookingId so Express doesn't treat "open" as a :bookingId param!
 app.get('/api/bookings/open', requireAuth, async (req, res) => {
   try {
     const user = res.locals.user;
@@ -413,6 +403,17 @@ app.get('/api/bookings/open', requireAuth, async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
   }
+});
+
+app.get('/api/bookings/:bookingId', requireAuth, async (req, res) => {
+  const user = res.locals.user;
+  const booking = await prisma.booking.findUnique({
+    where: { id: req.params.bookingId },
+    include: { category: true, customer: { select: { name: true, phone: true } }, provider: { select: { name: true, phone: true } }, review: true, statusHistory: { orderBy: { changedAt: 'asc' } } },
+  });
+  if (!booking) return res.status(404).json({ error: 'Booking not found' });
+  if (booking.customerId !== user.userId && booking.providerId !== user.userId) return res.status(403).json({ error: 'Not authorized for this booking' });
+  return res.json({ booking });
 });
 
 // ── Booking lifecycle ────────────────────────────────────────────────────
