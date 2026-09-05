@@ -56,7 +56,7 @@ export default function ProviderDashboard() {
   const [liveLocation, setLiveLocation] = useState<{ lat: number; lng: number; accuracy?: number } | null>(null);
   const [gpsStatus, setGpsStatus] = useState<'tracking' | 'searching' | 'denied'>('searching');
   const [lastGpsSync, setLastGpsSync] = useState<Date>(new Date());
-  
+
   // Real-time dispatch alert state
   const [realtimeAlert, setRealtimeAlert] = useState<{
     bookingId: string;
@@ -68,12 +68,17 @@ export default function ProviderDashboard() {
 
   const watchIdRef = useRef<number | null>(null);
   const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Refs so the interval/callback always has latest values without causing re-renders
+  const liveLocationRef = useRef<{ lat: number; lng: number; accuracy?: number } | null>(null);
+  const availableRef = useRef<boolean>(true);
+  useEffect(() => { availableRef.current = available; }, [available]);
 
   // 1. Send Presence + GPS Coordinates to Backend
   const syncLocation = useCallback(
     async (coords: { lat: number; lng: number; accuracy?: number }, isOnline: boolean) => {
       if (!user?.id) return;
       try {
+        liveLocationRef.current = coords;
         setLiveLocation(coords);
         setLastGpsSync(new Date());
 
@@ -102,7 +107,7 @@ export default function ProviderDashboard() {
     [user]
   );
 
-  // 2. Active GPS Watcher: Uses navigator.geolocation.watchPosition for continuous high accuracy
+  // 2. Active GPS Watcher - start once, use refs inside callbacks to avoid deps restarts
   const startGpsTracking = useCallback(() => {
     if (!navigator.geolocation) {
       setGpsStatus('denied');
@@ -111,68 +116,66 @@ export default function ProviderDashboard() {
 
     setGpsStatus('searching');
 
-    // First do an immediate getCurrentPosition
+    // Clear any previous watcher before creating a new one
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+
+    // Immediate one-shot fix to show location fast
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        const coords = {
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          accuracy: Math.round(pos.coords.accuracy),
-        };
+        const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: Math.round(pos.coords.accuracy) };
         setGpsStatus('tracking');
-        syncLocation(coords, available);
+        syncLocation(coords, availableRef.current);
       },
       () => {
         setGpsStatus('denied');
-        // Fallback default coordinates if denied
         const fallback = { lat: 12.9352, lng: 77.6245, accuracy: 50 };
-        syncLocation(fallback, available);
+        syncLocation(fallback, availableRef.current);
       },
       { timeout: 8000, enableHighAccuracy: true, maximumAge: 0 }
     );
 
-    // Then start continuous watchPosition
-    if (watchIdRef.current !== null) {
-      navigator.geolocation.clearWatch(watchIdRef.current);
-    }
-
+    // Continuous watcher - fires whenever device moves
     watchIdRef.current = navigator.geolocation.watchPosition(
       (pos) => {
-        const coords = {
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          accuracy: Math.round(pos.coords.accuracy),
-        };
+        const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: Math.round(pos.coords.accuracy) };
         setGpsStatus('tracking');
-        syncLocation(coords, available);
+        syncLocation(coords, availableRef.current);
       },
       (err) => {
         console.warn('GPS watch warning:', err.message);
       },
       { timeout: 15000, enableHighAccuracy: true, maximumAge: 5000 }
     );
-  }, [available, syncLocation]);
+  }, [syncLocation]);
 
-  // 3. Presence Lifecycle: Refresh GPS on mount and start periodic background sync
+  // 3. Presence Lifecycle: start GPS once on mount only (not on every re-render)
   useEffect(() => {
     startGpsTracking();
 
-    // Background interval to refresh DB ping every 20 seconds
+    // Background ping every 20s using refs - no dependency on state
     pingIntervalRef.current = setInterval(() => {
-      if (liveLocation) {
-        syncLocation(liveLocation, available);
+      const loc = liveLocationRef.current;
+      if (loc) {
+        syncLocation(loc, availableRef.current);
       }
     }, 20000);
 
     return () => {
       if (watchIdRef.current !== null) {
         navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
       }
       if (pingIntervalRef.current) {
         clearInterval(pingIntervalRef.current);
+        pingIntervalRef.current = null;
       }
     };
-  }, [available, startGpsTracking, syncLocation, liveLocation]);
+    // Run only once on mount — refs keep values fresh inside
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 4. Socket.io Real-Time Push Listener for Zomato/Swiggy Instant Dispatch
   useEffect(() => {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
@@ -14,10 +14,36 @@ export default function Book() {
   const [selectedSubCategory, setSelectedSubCategory] = useState('Standard Leak Repair');
   const [suggestedIssue, setSuggestedIssue] = useState('Dripping Faucet');
   const [description, setDescription] = useState('');
-  const [selectedDate, setSelectedDate] = useState('2026-05-20');
+  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedSlot, setSelectedSlot] = useState('09:00 AM - 11:00 AM');
   const [uploadedPhotos, setUploadedPhotos] = useState<string[]>([]);
   const [error, setError] = useState('');
+
+  // GPS state - auto-acquire real location for dispatch to work correctly
+  const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number; address: string }>({
+    lat: 12.9352, lng: 77.6245, address: 'Detecting your location…',
+  });
+  const gpsAcquiredRef = useRef(false);
+
+  useEffect(() => {
+    if (gpsAcquiredRef.current) return;
+    gpsAcquiredRef.current = true;
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        let address = `Live GPS (${lat.toFixed(5)}, ${lng.toFixed(5)})`;
+        try {
+          const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18`, { headers: { 'Accept-Language': 'en' } });
+          if (r.ok) { const d = await r.json(); if (d?.display_name) address = d.display_name; }
+        } catch { /* ignore */ }
+        setGpsCoords({ lat, lng, address });
+      },
+      () => { /* keep default Bengaluru coords as fallback */ },
+      { timeout: 8000, enableHighAccuracy: true, maximumAge: 0 }
+    );
+  }, []);
 
   // Resolve categoryId
   const { data: categoriesData } = useQuery({
@@ -43,9 +69,9 @@ export default function Book() {
       api.post<{ booking: Booking }>('/api/bookings/request', {
         providerId: providerId !== '1' ? providerId : null,
         categoryId,
-        address: '450 Sutter St, San Francisco, CA',
-        lat: 37.7897,
-        lng: -122.4072,
+        address: gpsCoords.address,
+        lat: gpsCoords.lat,
+        lng: gpsCoords.lng,
         scheduledAt: new Date(selectedDate).toISOString(),
         description: `${selectedSubCategory} - ${suggestedIssue}: ${description}`,
       }),
@@ -54,6 +80,7 @@ export default function Book() {
     },
     onError: (err: any) => setError(err.message || 'Booking failed'),
   });
+
 
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {

@@ -82,33 +82,37 @@ export function findNearbyOnlineProviders(
 ): Array<{ providerId: string; socketId: string; distanceKm: number; lat: number; lng: number }> {
   const results: Array<{ providerId: string; socketId: string; distanceKm: number; lat: number; lng: number }> = [];
 
-  const staleThreshold = 10 * 60 * 1000; // 10 minutes tolerance
+  // 30 minutes stale threshold — generous for Render free-tier restarts
+  const staleThreshold = 30 * 60 * 1000;
   const now = Date.now();
 
   for (const [providerId, p] of presenceMap.entries()) {
     if (!p.isOnline) continue;
     if (now - p.lastSeen.getTime() > staleThreshold) {
+      console.log(`[Dispatch] Skipping stale provider ${providerId}`);
       continue;
     }
     const dist = haversineKm(jobLat, jobLng, p.lat, p.lng);
-    console.log(`[Dispatch] Provider ${providerId} is ${dist.toFixed(2)}km from job (radar radius=${radiusKm}km)`);
-    
-    // Include all online providers within radius (or always if within 50km)
-    if (dist <= radiusKm || dist <= 50) {
-      results.push({
-        providerId,
-        socketId: p.socketId,
-        distanceKm: parseFloat(dist.toFixed(2)),
-        lat: p.lat,
-        lng: p.lng,
-      });
-    }
+    console.log(`[Dispatch] Provider ${providerId} is ${dist.toFixed(2)}km from job (radius=${radiusKm}km)`);
+
+    results.push({
+      providerId,
+      socketId: p.socketId,
+      distanceKm: parseFloat(dist.toFixed(2)),
+      lat: p.lat,
+      lng: p.lng,
+    });
   }
 
   return results.sort((a, b) => a.distanceKm - b.distanceKm);
 }
 
-/** Emit job:broadcast to nearby providers with real-time GPS distance comparison. */
+/** Emit job:broadcast to all online providers.
+ *  Strategy:
+ *  1. Targeted emit to known socket IDs from presenceMap (with distance info).
+ *  2. Room broadcast to providers:online — catches any provider connected after a server restart.
+ *  This handles Render free-tier restarts that wipe in-memory presenceMap.
+ */
 export function emitJobToNearbyProviders(
   booking: any,
   nearby: Array<{ providerId: string; socketId: string; distanceKm: number }>,
@@ -119,26 +123,29 @@ export function emitJobToNearbyProviders(
     return;
   }
 
-  const payload = {
+  const basePayload = {
     booking,
     radiusKm,
     nearbyWorkersCount: nearby.length,
     timestamp: new Date().toISOString(),
   };
 
-  // 1. Direct push to matched provider sockets with individual distance
+  // 1. Targeted push with exact distance for each known provider in presenceMap
   for (const { providerId, socketId, distanceKm } of nearby) {
-    console.log(
-      `[Dispatch] Emitting targeted job:broadcast to provider ${providerId} (${distanceKm}km, socket=${socketId})`
-    );
-    ioInstance.to(socketId).emit('job:broadcast', { ...payload, distanceKm });
-    ioInstance.to(`provider-room:${providerId}`).emit('job:broadcast', { ...payload, distanceKm });
+    console.log(`[Dispatch] → Targeted to provider ${providerId} socket=${socketId} dist=${distanceKm}km`);
+    ioInstance.to(socketId).emit('job:broadcast', { ...basePayload, distanceKm });
+    ioInstance.to(`provider-room:${providerId}`).emit('job:broadcast', { ...basePayload, distanceKm });
   }
 
-  // 2. Also emit to providers:online room and global broadcast so any active provider console updates instantly
-  ioInstance.to('providers:online').emit('job:broadcast', payload);
-  ioInstance.emit('job:broadcast', payload);
+  // 2. ALWAYS broadcast to providers:online room (handles server restarts that wipe presenceMap)
+  console.log(`[Dispatch] Broadcasting to providers:online room`);
+  ioInstance.to('providers:online').emit('job:broadcast', basePayload);
+
+  // 3. Global fallback so no provider misses it
+  ioInstance.emit('job:broadcast', basePayload);
 }
+
+
 
 // ── Backward-compat helper ──────────────────────────────────────────────────
 

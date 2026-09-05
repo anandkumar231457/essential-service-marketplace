@@ -9,6 +9,7 @@ export default function BookingConfirmation() {
   const { data } = useQuery({
     queryKey: ['booking', bookingId],
     enabled: Boolean(bookingId),
+    refetchInterval: 5000, // Poll every 5s until provider accepts
     queryFn: () =>
       api.get<{
         booking: Booking & {
@@ -19,10 +20,10 @@ export default function BookingConfirmation() {
   });
 
   const booking = data?.booking;
-  const bookingCode = booking ? `FIN-${booking.id.slice(-6).toUpperCase()}` : 'FIN-884210';
-  const categoryName = booking?.category?.name || 'Emergency Plumbing Repair';
-  const providerName = booking?.provider?.name || 'David Kim';
-  const address = booking?.address || '450 Sutter St, San Francisco, CA';
+  const bookingCode = booking ? `FIN-${booking.id.slice(-6).toUpperCase()}` : '…';
+  const categoryName = booking?.category?.name || 'Home Service';
+  const providerName = booking?.provider?.name || null;
+  const address = booking?.address || '—';
   
   const formattedDate = booking?.scheduledAt
     ? new Date(booking.scheduledAt).toLocaleString('en-US', {
@@ -32,7 +33,8 @@ export default function BookingConfirmation() {
         hour: 'numeric',
         minute: '2-digit',
       })
-    : 'Today, Oct 14, 2026 • 2:00 PM - 4:00 PM';
+    : '—';
+
 
   return (
     <div className="bg-[#f7fafb] px-4 py-12 sm:px-6 lg:px-8 pb-24 md:pb-16 min-h-screen">
@@ -117,19 +119,34 @@ export default function BookingConfirmation() {
             <h2 className="text-base font-bold text-slate-900">Service Summary</h2>
 
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <div className="flex items-center gap-3">
-                <div className="grid h-12 w-12 place-items-center rounded-2xl bg-slate-100 text-base font-bold text-slate-700 overflow-hidden shrink-0 border border-slate-200">
-                  {providerName.charAt(0)}
+              {providerName ? (
+                <div className="flex items-center gap-3">
+                  <div className="grid h-12 w-12 place-items-center rounded-2xl bg-slate-100 text-base font-bold text-slate-700 overflow-hidden shrink-0 border border-slate-200">
+                    {providerName.charAt(0)}
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">{providerName}</h3>
+                    <p className="text-[11px] text-slate-500 font-medium">{categoryName} Specialist</p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900">{providerName}</h3>
-                  <p className="text-[11px] text-slate-500 font-medium">Water Heater & Drain Specialist</p>
+              ) : (
+                <div className="flex items-center gap-3">
+                  <div className="grid h-12 w-12 place-items-center rounded-2xl bg-teal-50 shrink-0 border border-teal-200 animate-pulse">
+                    <span className="text-xl">🔍</span>
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-700">Finding a specialist near you…</h3>
+                    <p className="text-[11px] text-teal-600 font-medium animate-pulse">Matching your request with nearby pros</p>
+                  </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-1 text-xs font-bold text-slate-900 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200">
-                <span className="text-amber-500">⭐</span> 4.9
-              </div>
+              )}
+              {providerName && (
+                <div className="flex items-center gap-1 text-xs font-bold text-slate-900 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200">
+                  <span className="text-amber-500">⭐</span> Verified
+                </div>
+              )}
             </div>
+
 
             <div className="space-y-3.5 text-xs">
               <div className="flex justify-between items-center">
