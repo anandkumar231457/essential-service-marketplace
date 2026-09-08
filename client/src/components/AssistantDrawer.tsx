@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useAuthStore } from '../store/authStore';
 import { useNavigate } from 'react-router-dom';
+import { api } from '../lib/api';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -65,7 +65,6 @@ const AssistantDrawer: React.FC = () => {
   const resizeStart = useRef({ x: 0, y: 0, w: 0, h: 0 });
 
   const bodyRef = useRef<HTMLDivElement>(null);
-  const { accessToken } = useAuthStore();
   const navigate = useNavigate();
 
   // Persist window position/size
@@ -162,16 +161,8 @@ const AssistantDrawer: React.FC = () => {
     if (extra?.locationUpdate) payload.locationUpdate = extra.locationUpdate;
 
     try {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
+      const data = await api.post<any>('/api/assistant/chat', payload);
 
-      const res = await fetch('/api/assistant/chat', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
-      });
-
-      const data = await res.json();
       setMessages((prev) => [
         ...prev,
         {
