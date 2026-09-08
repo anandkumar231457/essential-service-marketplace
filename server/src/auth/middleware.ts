@@ -38,3 +38,24 @@ export function requireRole(
     next();
   };
 }
+
+export function optionalAuth(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.split(' ')[1];
+      const payload = verifyAccessToken(token);
+      res.locals.user = {
+        userId: payload.userId,
+        role: payload.role as 'CUSTOMER' | 'PROVIDER' | 'ADMIN',
+      };
+    }
+  } catch {
+    // Ignore invalid/expired token for optional endpoints
+  }
+  next();
+}

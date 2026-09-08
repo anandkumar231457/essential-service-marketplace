@@ -677,7 +677,7 @@ export default function ProviderDashboard() {
         {/* 2. Active Orders in Progress */}
         {activeJobs.length > 0 && (
           <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
-            <h2 className="text-base font-bold text-slate-900">Active Dispatches in Progress</h2>
+            <h2 className="text-base font-bold text-slate-900">Active Service Jobs</h2>
             <div className="space-y-4">
               {activeJobs.map((job) => (
                 <div key={job.id} className="rounded-2xl border border-slate-100 p-5 space-y-4">

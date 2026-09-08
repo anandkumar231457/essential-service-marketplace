@@ -21,6 +21,8 @@ import ProviderServices from './pages/ProviderServices';
 import PostJob from './pages/PostJob';
 import MobileNav from './components/MobileNav';
 
+import AssistantDrawer from './components/AssistantDrawer';
+
 const queryClient = new QueryClient();
 
 function Navigation() {
@@ -318,6 +320,7 @@ function App() {
             </Routes>
           </main>
           <MobileNav />
+            <AssistantDrawer />
           <Footer />
         </div>
       </BrowserRouter>

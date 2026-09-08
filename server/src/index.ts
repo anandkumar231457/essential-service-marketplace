@@ -8,9 +8,10 @@ import { createServer } from 'http';
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { env } from './config/env.js';
 import { prisma } from './lib/prisma.js';
-import { requireAuth } from './auth/middleware.js';
+import { requireAuth, optionalAuth } from './auth/middleware.js';
 import { register, login, refresh, googleAuth } from './auth/controller.js';
 import { create as createProvider, read as readProvider, update as updateProvider, nearby as nearbyProviders } from './server/providerCrud.js';
+import { chat as assistantChat } from './server/assistantController.js';
 import {
   request as requestBooking,
   accept as acceptBooking,
@@ -254,6 +255,10 @@ app.get('/api/providers/:id', async (req, res) => {
   if (!profile || profile.verifiedStatus !== 'VERIFIED') return res.status(404).json({ error: 'Provider not found' });
   return res.json({ profile });
 });
+
+// ── AI Assistant Endpoint ────────────────────────────────────────────────
+app.post('/api/assistant/chat', optionalAuth, assistantChat);
+
 
 // ── Worker Presence: Ping & Live Geolocation Endpoint ────────────────────
 app.post('/api/providers/ping', requireAuth, async (req, res) => {

@@ -47,7 +47,7 @@ export default function ProviderAvailability() {
         <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm mb-6 flex justify-between items-center">
           <div>
             <h3 className="font-bold text-slate-900 text-base">Instant Online Status</h3>
-            <p className="text-xs text-slate-500">Receive immediate dispatch requests nearby</p>
+            <p className="text-xs text-slate-500">Receive service requests from customers nearby</p>
           </div>
           <button
             onClick={toggleAvailability}

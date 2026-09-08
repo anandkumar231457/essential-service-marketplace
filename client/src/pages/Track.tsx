@@ -235,10 +235,10 @@ export default function Track() {
     setSearchRadius(25);
     try {
       await api.post(`/api/bookings/${bookingId}/rebroadcast`, { radiusKm: 25 });
-      setStatusMessage('📡 Re-broadcasted to all active specialists in your region!');
+      setStatusMessage('✓ Request refreshed! Notifying available professionals in your area.');
       setTimeout(() => setStatusMessage(''), 4000);
     } catch (err: any) {
-      setStatusMessage(`⚠️ ${err.message || 'Rebroadcast failed'}`);
+      setStatusMessage(`⚠️ ${err.message || 'Unable to refresh request'}`);
     }
   };
 
@@ -275,7 +275,7 @@ export default function Track() {
                 socketConnected ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-slate-50 border-slate-200 text-slate-500'
               }`}
             >
-              {socketConnected ? '● Live Dispatch Stream' : '○ Polling Sync'}
+              {socketConnected ? '● Live Updates' : '○ Syncing'}
             </span>
           </div>
         </header>
@@ -292,7 +292,7 @@ export default function Track() {
             <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm flex flex-col md:flex-row justify-between md:items-center gap-4">
               <div>
                 <div className="flex items-center gap-3">
-                  <h1 className="text-xl font-bold text-slate-900">{booking.category?.name || 'Service Dispatch'}</h1>
+                  <h1 className="text-xl font-bold text-slate-900">{booking.category?.name || 'Service Request'}</h1>
                   <StatusBadge status={booking.status} />
                 </div>
                 <p className="mt-1 text-xs text-slate-500">📍 Destination: {booking.address}</p>
@@ -301,7 +301,7 @@ export default function Track() {
                     ? `Customer: ${booking.customer?.name || 'Customer'}`
                     : booking.provider?.name
                     ? `Assigned Specialist: ${booking.provider.name}`
-                    : `Assigned Specialist: 🛵 Broadcasting live to nearby pros (within ${searchRadius}km)…`}
+                    : `Assigned to: 🔍 Looking for a professional nearby (within ${searchRadius}km)…`}
                 </p>
               </div>
 
@@ -315,20 +315,20 @@ export default function Track() {
               )}
             </div>
 
-            {/* UNASSIGNED BROADCAST WAITING RADAR (CUSTOMER VIEW) - SWIGGY / ZOMATO STYLE */}
+            {/* CUSTOMER WAITING CARD — shown when no provider assigned yet */}
             {!isProvider && booking.status === 'REQUESTED' && !booking.providerId && (
               <div className="rounded-3xl border-2 border-teal-500/60 bg-teal-50/60 p-6 shadow-md space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
                     <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-teal-600 text-white font-bold text-xl shadow-md animate-pulse">
-                      🛵
+                      🔍
                     </span>
                     <div>
                       <h3 className="font-extrabold text-slate-900 text-base">
-                        Swiggy/Zomato Instant Broadcast Active
+                        Finding a Professional Near You
                       </h3>
                       <p className="text-xs text-slate-600">
-                        Radar Search: <span className="font-bold text-teal-800">{searchRadius} km</span> • Searching for{' '}
+                        Search area: <span className="font-bold text-teal-800">{searchRadius} km</span> • Searching for{' '}
                         {searchSeconds}s
                       </p>
                     </div>
@@ -349,15 +349,15 @@ export default function Track() {
                   </div>
                 </div>
 
-                {/* Detected nearby specialists badge list */}
+                {/* Nearby professionals list */}
                 {nearbyPros.length > 0 ? (
                   <div className="rounded-2xl bg-white border border-teal-200 p-4 space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-extrabold text-emerald-700 flex items-center gap-1.5">
                         <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-ping"></span>
-                        🟢 {nearbyPros.length} Verified Specialist(s) Online Nearby
+                        🟢 {nearbyPros.length} {nearbyPros.length === 1 ? 'Professional' : 'Professionals'} Available Nearby
                       </span>
-                      <span className="text-[10px] font-bold text-slate-400">First specialist to accept will be dispatched</span>
+                      <span className="text-[10px] font-bold text-slate-400">The first to accept will be assigned</span>
                     </div>
                     <div className="flex flex-wrap gap-2 pt-1">
                       {nearbyPros.map((pro) => (
@@ -365,7 +365,7 @@ export default function Track() {
                           key={pro.providerId}
                           className="flex items-center gap-2 rounded-xl bg-teal-50 border border-teal-200 px-3 py-1.5 text-xs font-bold text-slate-900 shadow-xs"
                         >
-                          <span>🛵 {pro.name}</span>
+                          <span>🔧 {pro.name}</span>
                           <span className="rounded-md bg-teal-200/70 px-1.5 py-0.5 text-[10px] text-teal-900 font-extrabold">
                             {pro.distanceKm} km away
                           </span>
@@ -375,7 +375,7 @@ export default function Track() {
                   </div>
                 ) : (
                   <div className="rounded-xl bg-white/80 p-3 text-xs text-slate-600 font-medium">
-                    🛰️ Dispatched order to specialists in your region. Waiting for first available pro to accept…
+                    🔍 Looking for available professionals in your area. Waiting for someone to accept your request…
                   </div>
                 )}
 
@@ -388,7 +388,7 @@ export default function Track() {
 
                 {searchSeconds > 60 && (
                   <div className="rounded-xl bg-white/80 p-3 text-xs text-slate-700 flex items-center justify-between">
-                    <span>Specialists are currently busy. You can continue waiting or schedule for later.</span>
+                    <span>Professionals are currently busy. You can keep waiting or try again.</span>
                     <button onClick={retryBroadcast} className="font-bold text-teal-800 underline ml-2">
                       Try Again
                     </button>
@@ -397,15 +397,15 @@ export default function Track() {
               </div>
             )}
 
-            {/* SWIGGY-STYLE PROVIDER DRIVER ACTIONS PANEL */}
+            {/* PROVIDER ACTIONS PANEL */}
             {isProvider && !isTerminated && (
               <div className="rounded-3xl border-2 border-primary bg-teal-50/50 p-6 shadow-sm space-y-4">
                 <div className="flex justify-between items-center">
                   <div>
                     <span className="rounded-md bg-primary text-white text-[10px] font-bold px-2 py-0.5 uppercase">
-                      Driver Action Cockpit
+                      Your Actions
                     </span>
-                    <h3 className="font-bold text-slate-900 text-base mt-1">Current Order Action</h3>
+                    <h3 className="font-bold text-slate-900 text-base mt-1">Current Service Request</h3>
                   </div>
                   <div className="flex gap-2">
                     {booking.customer?.phone && (
@@ -564,7 +564,7 @@ export default function Track() {
                           <p className="text-xs text-slate-600 font-medium">Category: {pro.category}</p>
                           <p className="text-xs text-emerald-700 font-bold">📍 {pro.distanceKm} km from you</p>
                           <span className="inline-block rounded-md bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
-                            🟢 Online • Broadcast Dispatched
+                            🟢 Online • Available Nearby
                           </span>
                         </div>
                       </Popup>
@@ -576,8 +576,8 @@ export default function Track() {
                   <Marker position={[providerStatus.lat, providerStatus.lng]} icon={assignedProMarkerIcon}>
                     <Popup>
                       <div className="space-y-1 p-1">
-                        <strong className="text-slate-900 font-bold">🚗 {booking.provider?.name || 'Assigned Specialist'}</strong>
-                        <p className="text-xs text-slate-600 font-medium">{booking.category?.name || 'Service'} Specialist</p>
+                        <strong className="text-slate-900 font-bold">🚗 {booking.provider?.name || 'Assigned Professional'}</strong>
+                        <p className="text-xs text-slate-600 font-medium">{booking.category?.name || 'Service'} Professional</p>
                         <span className="inline-block rounded-md bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
                           {providerStatus.isOnline ? '🟢 En Route • Live Location Active' : 'Offline'}
                         </span>

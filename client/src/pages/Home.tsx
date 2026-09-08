@@ -87,7 +87,7 @@ export default function Home() {
                 to="/post-job"
                 className="inline-flex items-center gap-2 rounded-xl bg-amber-500 px-5 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-amber-600 transition"
               >
-                <span>🛵 Post a Job (Broadcast to Nearby Pros)</span>
+                <span>⚡ Post a Service Request</span>
                 <span className="rounded-full bg-amber-600 px-2 py-0.5 text-[10px]">Instant</span>
               </Link>
               <Link

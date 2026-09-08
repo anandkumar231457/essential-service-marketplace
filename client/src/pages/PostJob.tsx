@@ -141,12 +141,12 @@ export default function PostJob() {
           <div className="border-b border-slate-100 pb-4">
             <div className="flex items-center gap-2">
               <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-800 flex items-center gap-1">
-                🛵 Swiggy/Zomato Style Instant Dispatch
+              ⚡ Instant Service Booking
               </span>
             </div>
             <h1 className="mt-3 text-2xl sm:text-3xl font-extrabold text-slate-900">Post a Service Job</h1>
             <p className="mt-1 text-xs sm:text-sm text-slate-500">
-              Your job will be dispatched in real-time to active verified specialists nearest to your device GPS.
+              Your request will be sent instantly to verified professionals nearest to your location.
             </p>
           </div>
 
@@ -335,8 +335,8 @@ export default function PostJob() {
             <div className="flex items-center gap-2">
               <span className="text-xl">⚡</span>
               <div>
-                <p className="font-bold text-slate-800">Direct Swiggy-Style Dispatch</p>
-                <p className="text-[11px] text-slate-500">Order broadcasted to nearest pros based on your device GPS.</p>
+                <p className="font-bold text-slate-800">Instant Service Matching</p>
+                <p className="text-[11px] text-slate-500">Your request is sent to the nearest available professionals based on your location.</p>
               </div>
             </div>
             <span className="font-extrabold text-slate-900 text-sm">₹500 / hr</span>
@@ -348,8 +348,8 @@ export default function PostJob() {
             className="w-full rounded-2xl bg-teal-600 py-3.5 font-bold text-white shadow-md transition hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
           >
             {postMutation.isPending
-              ? '📡 Dispatching to Nearby Specialists…'
-              : '🛵 Post Job & Dispatch to Nearby Pros'}
+              ? '⏳ Sending your request…'
+              : '⚡ Submit Service Request'}
           </button>
         </div>
       </div>
